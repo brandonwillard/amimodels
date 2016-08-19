@@ -1,6 +1,9 @@
 from setuptools import setup, find_packages
+from Cython.Build import cythonize
 
 version = __import__('amimodels').get_version()
+
+ext_modules = cythonize("amimodels/*.pyx")
 
 setup(name='amimodels',
       version=version,
@@ -25,5 +28,7 @@ setup(name='amimodels',
                         'holidays >= 0.4.1',
                         'pymc==2.3.6',
                         'Theano==0.8.1',
+                        'Cython==0.23.4',
                         ],
+      ext_modules=ext_modules,
       )
