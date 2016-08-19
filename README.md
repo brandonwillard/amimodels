@@ -13,7 +13,7 @@ TODO: Docs on [RTD](http://amimodels.readthedocs.org/en/latest/).
 Dev Installation
 ----------------
 
-    $ git clone https://github.com/impactlab/amimodels
+    $ git clone https://github.com/openeemeter/amimodels
     $ cd amimodels
     $ mkvirtualenv amimodels
     (amimodels)$ pip install -e .
