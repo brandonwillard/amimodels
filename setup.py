@@ -1,6 +1,22 @@
+import os
 from setuptools import setup, find_packages
 
 version = __import__('amimodels').get_version()
+
+on_rtd = os.environ.get('READTHEDOCS') == 'True'
+
+install_requires = ['eemeter >= 0.3.11',
+                    'numpy',
+                    'scipy',
+                    'pandas >= 0.18',
+                    'patsy==0.4.1',
+                    'scikit-learn==0.17.1',
+                    'holidays >= 0.4.1',
+                    'Theano==0.8.1',
+                    ],
+
+if not on_rtd:
+    install_requires += ['pymc==2.3.6']
 
 setup(name='amimodels',
       version=version,
@@ -16,15 +32,5 @@ setup(name='amimodels',
       ],
       keywords='open energy efficiency ami modeling',
       packages=find_packages(),
-      setup_requires=['numpy'],
-      install_requires=['eemeter >= 0.3.11',
-                        'numpy',
-                        'scipy',
-                        'pandas >= 0.18',
-                        'patsy==0.4.1',
-                        'scikit-learn==0.17.1',
-                        'holidays >= 0.4.1',
-                        'pymc==2.3.6',
-                        'Theano==0.8.1',
-                        ],
+      install_requires=install_requires,
       )

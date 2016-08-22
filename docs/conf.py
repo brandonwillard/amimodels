@@ -21,6 +21,8 @@ import sphinx_rtd_theme
 # documentation root, use os.path.abspath to make it absolute, like shown here.
 #sys.path.insert(0, os.path.abspath('.'))
 
+on_rtd = os.environ.get('READTHEDOCS') == 'True'
+
 # -- General configuration ------------------------------------------------
 
 # If your documentation needs a minimal Sphinx version, state it here.
@@ -41,9 +43,10 @@ extensions = [
     'sphinx.ext.autosummary',
 ]
 
-autodoc_mock_imports = [
-    'pymc',
-]
+if on_rtd:
+    autodoc_mock_imports = [
+        'pymc',
+    ]
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
