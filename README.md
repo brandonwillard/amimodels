@@ -8,7 +8,7 @@ Implementations of AMI data models to be used within the
 Documentation
 -------------
 
-TODO: Docs on [RTD](http://amimodels.readthedocs.org/en/latest/).
+Docs on [RTD](http://amimodels.readthedocs.org/en/latest/).
 
 Dev Installation
 ----------------
