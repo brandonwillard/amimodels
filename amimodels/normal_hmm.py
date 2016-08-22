@@ -553,11 +553,6 @@ def make_normal_hmm(y_data, X_data, initial_params):
                              value=initial_params.betas[s],
                              size=size_s)
 
-        #beta_s = pymc.Cauchy('beta-{}'.format(s),
-        #                     initial_params.betas[s],
-        #                     Ws[s],  # 1. / Ws[s],
-        #                     value=initial_params.betas[s],
-        #                     size=size_s if size_s > 1 else None)
         betas += [beta_s]
 
     del s, beta_s, size_s

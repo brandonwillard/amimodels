@@ -20,6 +20,18 @@ class HMMLinearCombination(pymc.Deterministic):
     rows of design matrices :math:`x^{(k)}_t`, and covariate vectors
     :math:`\beta^{(k)}`.
 
+    This deterministic organizes, separates and tracks the aforementioned
+    :math:`\mu_t` in pieces designated by the current state sequence, :math:`S_t`.
+    Specficially, it tracks a set containing the following sets for
+    :math:`k \in \{1,\dots,K\}`
+
+    .. math::
+        \left\{ \mu^{(k)} = \tilde{X}^{(k)} \beta^{(k)},
+           \tilde{X}^{(k)} = X_{\mathcal{T}^{(k)}},
+           \mathcal{T}^{(k)} = \{t : S_t = k\}
+        \right\}
+
+
     """
 
     def __init__(self, name, X_matrices, betas, states, *args, **kwds):
