@@ -582,6 +582,102 @@ def make_normal_hmm(y_data, X_data, initial_params):
     return pymc.Model(locals())
 
 
+def make_poisson_hmm(y_data, X_data, initial_params):
+    r""" Construct a PyMC2 scalar poisson-emmisions HMM model of the form
+
+    .. math::
+
+        y_t &\sim \operatorname{Poisson}(\exp(x_t^{(S_t)\top} \beta^{(S_t)})) \\
+        \beta^{(S_t)}_i &\sim \operatorname{N}(m^{(S_t)}, C^{(S_t)}), \quad i \in \{1,\dots,M\} \\
+        S_t \mid S_{t-1} &\sim \operatorname{Categorical}(\pi^{(S_{t-1})}) \\
+        \pi^{(S_t-1)} &\sim \operatorname{Dirichlet}(\alpha^{(S_{t-1})})
+
+    where :math:`C^{(S_t)} = \lambda_i^{(S_t) 2} \tau^{(S_t) 2}` and
+
+    .. math::
+
+        \lambda^{(S_t)}_i &\sim \operatorname{Cauchy}^{+}(0, 1) \\
+        \tau^{(S_t)} &\sim \operatorname{Cauchy}^{+}(0, 1)
+
+    for observations :math:`y_t` in :math:`t \in \{0, \dots, T\}`,
+    features :math:`x_t^{(S_t)} \in \mathbb{R}^M`,
+    regression parameters :math:`\beta^{(S_t)}`, state sequences :math:`\{S_t\}^T_{t=1}` and
+    state transition probabilities :math:`\pi \in [0, 1]^{K}`.
+    :math:`\operatorname{Cauchy}^{+}` is the standard half-Cauchy distribution
+    and :math:`\operatorname{N}` is the normal/Gaussian distribution.
+
+    The set of random variables,
+    :math:`\mathcal{S} = \{\{\beta^{(k)}, \lambda^{(k)}, \tau^{(k)}, \tau^{(k)}, \pi^{(k)}\}_{k=1}^K, \{S_t\}^T_{t=1}\}`,
+    are referred to as "stochastics" throughout the code.
+
+
+    Parameters
+    ==========
+    y_data: pandas.DataFrame
+        Usage/response observations :math:`y_t`.
+    X_data: list of pandas.DataFrame
+        List of design matrices for each state, i.e. :math:`x_t^{(S_t)}`.  Each
+        must span the entire length of observations (i.e. `y_data`).
+    initial_params: NormalHMMInitialParams
+        The initial parameters, which include
+        :math:`\pi_0, m^{(k)}, \alpha^{(k)}, V^{(k)}`.
+        Ignores `V` parameters.
+        FIXME: using the "Normal" initial params objects is only temporary.
+
+    Returns
+    =======
+    A ``pymc.Model`` object used for sampling.
+    """
+
+    N_obs = y_data.shape[0]
+    N_states = len(X_data)
+
+    alpha_trans = initial_params.alpha_trans
+
+    trans_mat = TransProbMatrix("trans_mat", alpha_trans,
+                                value=initial_params.trans_mat)
+
+    states = HMMStateSeq("states", trans_mat, N_obs, p0=initial_params.p0,
+                         value=initial_params.states)
+
+    Ws = initial_params.Ws
+    betas = []
+    for s in range(N_states):
+        size_s = np.alen(initial_params.betas[s])
+        size_s = size_s if size_s > 1 else None
+
+        lambda_s = pymc.HalfCauchy('lambda-{}'.format(s),
+                                   0., 1., size=size_s)
+        eta_s = pymc.HalfCauchy('tau-{}'.format(s), 0., 1.)
+
+        beta_s = pymc.Normal('beta-{}'.format(s),
+                             initial_params.betas[s],
+                             lambda_s**(-2),  # 1. / Ws[s],
+                             value=initial_params.betas[s],
+                             size=size_s)
+
+        betas += [beta_s]
+
+    del s, beta_s, size_s
+
+    mu_reg = HMMLinearCombination('mu', X_data, betas, states, trace=False)
+
+    @pymc.deterministic(trace=True, plot=False)
+    def mu(mu_reg_=mu_reg):
+        return np.exp(mu_reg_)
+
+    if y_data is not None:
+        y_data = np.ma.masked_invalid(y_data).astype(np.object)
+        y_data.set_fill_value(None)
+        y_rv = pymc.Poisson('y', mu, value=y_data, observed=True)
+    else:
+        y_rv = pymc.Poisson('y_pred', mu)
+
+    del initial_params
+
+    return pymc.Model(locals())
+
+
 def make_normal_baseline_hmm(y_data, X_data, baseline_end, initial_params):
     """ Construct a PyMC2 scalar normal-emmisions HMM with a
     stochastic reporting period start time parameter and baseline, reporting
