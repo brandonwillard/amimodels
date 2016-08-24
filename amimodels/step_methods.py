@@ -459,6 +459,8 @@ class NormalNormalStep(ExtStepMethod):
         # If they're both linear transformations, that
         # should be OK, though.  Just need to compose
         # all the transformations between them.
+        #
+        #assert self.mu_y == self.mu_beta
 
         (self.X,) = self.mu_beta.x
         self.tau_y = self.y_beta.parents['tau']
@@ -467,7 +469,7 @@ class NormalNormalStep(ExtStepMethod):
         # Check for a mask corresponding to missing values.
         #
         y_mask = getattr(self.y_beta, 'mask', None)
-        if y_mask is not None and np.squeeze(y_mask).any():
+        if y_mask is not None and y_mask.any():
             y_mask = ~y_mask.squeeze()
         else:
             y_mask = None
@@ -505,6 +507,10 @@ class NormalNormalStep(ExtStepMethod):
         # for whatever that's worth).
 
         y = np.squeeze(self.y_obs.value)
+
+        if np.alen(y) == 0:
+            return
+
         X = getattr(self.X, 'value', self.X)
         # Gotta broadcast when the parameters are scalars.
         bcast_beta = np.ones_like(self.stochastic.value)
