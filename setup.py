@@ -13,7 +13,7 @@ install_requires = ['eemeter >= 0.3.11',
                     'scikit-learn==0.17.1',
                     'holidays >= 0.4.1',
                     'Theano==0.8.1',
-                    ],
+                    ]
 
 if not on_rtd:
     install_requires += ['pymc==2.3.6']
