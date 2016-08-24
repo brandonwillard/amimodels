@@ -526,8 +526,8 @@ def make_normal_hmm(y_data, X_data, initial_params):
     A ``pymc.Model`` object used for sampling.
     """
 
-    N_obs = y_data.shape[0]
     N_states = len(X_data)
+    N_obs = X_data[0].shape[0]
 
     alpha_trans = initial_params.alpha_trans
 
@@ -568,9 +568,9 @@ def make_normal_hmm(y_data, X_data, initial_params):
     if y_data is not None:
         y_data = np.ma.masked_invalid(y_data).astype(np.object)
         y_data.set_fill_value(None)
-        y_rv = pymc.Normal('y', mu, 1./V, value=y_data, observed=True)
-    else:
-        y_rv = pymc.Normal('y_pred', mu, 1./V)
+
+    y_rv = pymc.Normal('y', mu, 1./V, value=y_data,
+                       observed=True if y_data is not None else False)
 
     del initial_params
 
@@ -624,8 +624,8 @@ def make_poisson_hmm(y_data, X_data, initial_params):
     A ``pymc.Model`` object used for sampling.
     """
 
-    N_obs = y_data.shape[0]
     N_states = len(X_data)
+    N_obs = X_data[0].shape[0]
 
     alpha_trans = initial_params.alpha_trans
 
@@ -664,9 +664,9 @@ def make_poisson_hmm(y_data, X_data, initial_params):
     if y_data is not None:
         y_data = np.ma.masked_invalid(y_data).astype(np.object)
         y_data.set_fill_value(None)
-        y_rv = pymc.Poisson('y', mu, value=y_data, observed=True)
-    else:
-        y_rv = pymc.Poisson('y_pred', mu)
+
+    y_rv = pymc.Poisson('y', mu, value=y_data,
+                        observed=True if y_data is not None else False)
 
     del initial_params
 
@@ -697,14 +697,14 @@ def make_normal_baseline_hmm(y_data, X_data, baseline_end, initial_params):
     A pymc.Model object used for sampling.
     """
 
-    N_obs = y_data.shape[0]
     N_states = len(X_data)
+    N_obs = X_data[0].shape[0]
 
     alpha_trans = initial_params.alpha_trans
 
     # TODO: If we wanted a distribution over the time
     # when a renovation becomes effective...
-    baseline_idx = y_data.index.get_loc(baseline_end)
+    baseline_idx = X_data[0].index.get_loc(baseline_end)
     reporting_start = pymc.DiscreteUniform("reporting_start",
                                            baseline_idx + 1,
                                            N_obs,
@@ -766,9 +766,9 @@ def make_normal_baseline_hmm(y_data, X_data, baseline_end, initial_params):
     if y_data is not None:
         y_data = np.ma.masked_invalid(y_data).astype(np.object)
         y_data.set_fill_value(None)
-        y_rv = pymc.Normal('y', mu, 1./V, value=y_data, observed=True)
-    else:
-        y_rv = pymc.Normal('y_pred', mu, 1./V)
+
+    y_rv = pymc.Normal('y', mu, 1./V, value=y_data,
+                       observed=True if y_data is not None else False)
 
     del initial_params
 
