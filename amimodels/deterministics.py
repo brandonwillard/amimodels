@@ -42,7 +42,7 @@ class HMMLinearCombination(pymc.Deterministic):
             Matrices for each possible value of :math:`S_t` with rows
             corresponding to :math:`x_t` in the product
             :math:`x_t^\top \beta^{(S_t)}`.
-        betas: list of np.ndarrays
+        betas: list of np.ndarrays or pymc.Stochastics
             Vectors corresponding to each :math:`beta^{(S_t)}` in the
             product :math:`x_t^\top \beta^{(S_t)}`.
         states: np.ndarray of int
@@ -62,7 +62,7 @@ class HMMLinearCombination(pymc.Deterministic):
         if not self.N_obs == np.alen(states.value):
             raise ValueError("states do not match X_matrices dimensions")
 
-        if not all([np.shape(X_)[-1] == np.alen(b_)
+        if not all([np.shape(X_)[-1] == np.alen(getattr(b_, 'value', b_))
                     for X_, b_ in zip(X_matrices, betas)]):
             raise ValueError("X_matrices and betas dimensions don't match")
 
