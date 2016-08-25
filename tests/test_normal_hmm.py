@@ -10,7 +10,7 @@ from amimodels.testing import assert_hpd
 
 from amimodels.normal_hmm import (NormalHMMProcess, make_normal_hmm,
                                   compute_trans_freqs, gmm_norm_hmm_init_params,
-                                  bic_norm_hmm_init_params)
+                                  bic_norm_hmm_init_params, NormalHMMInitialParams)
 from amimodels.step_methods import TransProbMatStep, HMMStatesStep
 
 slow = pytest.mark.skipif(
@@ -132,6 +132,49 @@ def test_missing_init(initialize_2_state_trans):
     assert not any(init_params.states.isnull())
 
 
+@pytest.mark.skip(reason="In progress...")
+@slow
+def test_prediction(process_2_state_trans,
+                    initialize_2_state_trans,
+                    mcmc_iters=2000,
+                    progress_bar=False):
+
+    # TODO: testing; remove.
+    from collections import namedtuple
+    Request = namedtuple('Request', ['param'])
+    r = Request(param=np.asarray([[0.9], [0.2]]))
+    model_true = process_2_state_trans(r)
+
+    states_true, y, X_matrices = model_true.simulate()
+
+    y_obs = None
+    N_states = len(X_matrices)
+    N_obs = X_matrices[0].shape[0]
+
+    init_params = NormalHMMInitialParams(np.ones((N_states, N_states)),
+                                         None,
+                                         np.zeros(N_obs),
+                                         None,
+                                         None,
+                                         model_true.Vs,
+                                         None)
+
+    norm_hmm = make_normal_hmm(y_obs, X_matrices, init_params)
+
+    mcmc_step = pymc.MCMC(norm_hmm.variables)
+
+    mcmc_step.assign_step_methods(verbose=100)
+
+    mcmc_iters = 2000
+    progress_bar = True
+    mcmc_step.sample(mcmc_iters,
+                     burn=mcmc_iters//2,
+                     progress_bar=progress_bar)
+
+    # TODO: Check all estimated quantities?
+    assert_hpd(norm_hmm.trans_mat, model_true.trans_mat)
+
+
 @slow
 def test_missing_inference(process_2_state_trans,
                            initialize_2_state_trans,
@@ -139,8 +182,6 @@ def test_missing_inference(process_2_state_trans,
                            progress_bar=False):
     """ Test that the estimation and initialization can handle missing data.
     """
-
-    model_true = process_2_state_trans
 
     states_true, y, X_matrices = model_true.simulate()
 

@@ -62,7 +62,7 @@ class HMMLinearCombination(pymc.Deterministic):
         if not self.N_obs == np.alen(states.value):
             raise ValueError("states do not match X_matrices dimensions")
 
-        if not all([np.shape(X_)[-1] == np.shape(b_)[-1]
+        if not all([np.shape(X_)[-1] == np.alen(b_)
                     for X_, b_ in zip(X_matrices, betas)]):
             raise ValueError("X_matrices and betas dimensions don't match")
 

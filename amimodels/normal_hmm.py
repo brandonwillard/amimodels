@@ -537,29 +537,37 @@ def make_normal_hmm(y_data, X_data, initial_params):
     states = HMMStateSeq("states", trans_mat, N_obs, p0=initial_params.p0,
                          value=initial_params.states)
 
-    Ws = initial_params.Ws
     betas = []
+    etas = []
+    lambdas = []
     for s in range(N_states):
-        size_s = np.alen(initial_params.betas[s])
+
+        initial_beta = None
+        if initial_params.betas is not None:
+            initial_beta = initial_params.betas[s]
+
+        size_s = X_data[s].shape[1]
         size_s = size_s if size_s > 1 else None
 
         lambda_s = pymc.HalfCauchy('lambda-{}'.format(s),
                                    0., 1., size=size_s)
-        eta_s = pymc.HalfCauchy('tau-{}'.format(s), 0., 1.)
+
+        eta_s = pymc.HalfCauchy('tau-{}'.format(s),
+                                0., 1.)
 
         beta_s = pymc.Normal('beta-{}'.format(s),
-                             initial_params.betas[s],
-                             lambda_s**(-2),  # 1. / Ws[s],
-                             value=initial_params.betas[s],
+                             0., (lambda_s * eta_s)**(-2),
+                             value=initial_beta,
                              size=size_s)
 
         betas += [beta_s]
-
-    del s, beta_s, size_s
-
-    Vs = initial_params.Vs
+        etas += [eta_s]
+        lambdas += [lambda_s]
 
     mu = HMMLinearCombination('mu', X_data, betas, states)
+
+    # TODO: Prior on observation variance?
+    Vs = initial_params.Vs
 
     @pymc.deterministic(trace=False, plot=False)
     def V(states_=states, V_=Vs):
@@ -572,7 +580,7 @@ def make_normal_hmm(y_data, X_data, initial_params):
     y_rv = pymc.Normal('y', mu, 1./V, value=y_data,
                        observed=True if y_data is not None else False)
 
-    del initial_params
+    del initial_params, s, beta_s, size_s, lambda_s, eta_s
 
     return pymc.Model(locals())
 
@@ -635,25 +643,32 @@ def make_poisson_hmm(y_data, X_data, initial_params):
     states = HMMStateSeq("states", trans_mat, N_obs, p0=initial_params.p0,
                          value=initial_params.states)
 
-    Ws = initial_params.Ws
     betas = []
+    etas = []
+    lambdas = []
     for s in range(N_states):
-        size_s = np.alen(initial_params.betas[s])
+
+        initial_beta = None
+        if initial_params.betas is not None:
+            initial_beta = initial_params.betas[s]
+
+        size_s = X_data[s].shape[1]
         size_s = size_s if size_s > 1 else None
 
         lambda_s = pymc.HalfCauchy('lambda-{}'.format(s),
                                    0., 1., size=size_s)
-        eta_s = pymc.HalfCauchy('tau-{}'.format(s), 0., 1.)
+
+        eta_s = pymc.HalfCauchy('tau-{}'.format(s),
+                                0., 1.)
 
         beta_s = pymc.Normal('beta-{}'.format(s),
-                             initial_params.betas[s],
-                             lambda_s**(-2),  # 1. / Ws[s],
-                             value=initial_params.betas[s],
+                             0., (lambda_s * eta_s)**(-2),
+                             value=initial_beta,
                              size=size_s)
 
         betas += [beta_s]
-
-    del s, beta_s, size_s
+        etas += [eta_s]
+        lambdas += [lambda_s]
 
     mu_reg = HMMLinearCombination('mu', X_data, betas, states, trace=False)
 
@@ -668,7 +683,7 @@ def make_poisson_hmm(y_data, X_data, initial_params):
     y_rv = pymc.Poisson('y', mu, value=y_data,
                         observed=True if y_data is not None else False)
 
-    del initial_params
+    del initial_params, s, beta_s, size_s, lambda_s, eta_s
 
     return pymc.Model(locals())
 
