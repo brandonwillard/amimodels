@@ -506,9 +506,10 @@ class NormalNormalStep(ExtStepMethod):
         # to multivariate beta (and even y with non-diagonal covariances,
         # for whatever that's worth).
 
-        y = np.squeeze(self.y_obs.value)
+        y = np.atleast_1d(np.squeeze(self.y_obs.value))
 
         if np.alen(y) == 0:
+            self.stochastic.random()
             return
 
         X = getattr(self.X, 'value', self.X)

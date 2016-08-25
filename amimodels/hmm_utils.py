@@ -36,7 +36,7 @@ def compute_trans_freqs(states, N_states, counts_only=False):
     if counts_only:
         return counts
 
-    freqs = counts/counts.sum(axis=1, keepdims=True)
+    freqs = counts/np.maximum(1, counts.sum(axis=1, keepdims=True))
     return freqs
 
 

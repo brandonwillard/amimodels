@@ -351,15 +351,17 @@ def gmm_norm_hmm_init_params(y, X_matrices):
 
 def bic_norm_hmm_init_params(y, X_matrices):
     """ Initialize a normal HMM regression mixture with a GMM mixture
-    of a BIC determined number of states.  Regression components are
-    initialized with estimates conditional on the predicted GMM state sequence.
+    of a BIC determined number of states.  Starting with an initial
+    set of design matrices, this function searches for the best number
+    of additional constant states to add to the model.
+
 
     Parameters
     ==========
     y: pandas.DataFrame or pandas.Series
         Time-indexed vector of observations.
     X_matrices: list of pandas.DataFrame
-        Collection of design matrices for each hidden state's mean.
+        Collection of design matrices for each initial state.
 
     Returns
     =======
@@ -372,7 +374,7 @@ def bic_norm_hmm_init_params(y, X_matrices):
     from sklearn import mixture
     lowest_bic = np.infty
     bic = []
-    for n_components in range(1, 10):
+    for n_components in range(N_states, 10):
         gmm = mixture.GMM(n_components=n_components,
                           covariance_type="diag")
         _ = gmm.fit(y.dropna())
@@ -380,10 +382,6 @@ def bic_norm_hmm_init_params(y, X_matrices):
         if bic[-1] < lowest_bic:
             lowest_bic = bic[-1]
             best_gmm = gmm
-
-    if best_gmm.n_components < N_states:
-        raise Exception("desired number of components is greater than number of\
-                        states in the model")
 
     from operator import itemgetter
     gmm_order = sorted(enumerate(best_gmm.means_), key=itemgetter(1))
@@ -464,15 +462,25 @@ def bic_norm_hmm_init_params(y, X_matrices):
                                      False, states_ordered))
         from sklearn import linear_model
         reg_model = linear_model.ElasticNetCV(fit_intercept=False)
+
+        N_beta = X_matrices[i].shape[1]
+
         X_cond = X_matrices[i][states_cond]
         y_cond = y[states_cond].get_values().ravel()
-        # TODO: Could ask how this compares to the intercept-only model above.
-        reg_model_fit = reg_model.fit(X_cond, y_cond)
-        reg_model_err = np.atleast_1d(np.var(reg_model_fit.predict(X_cond) -
-                                             y_cond))
-        beta_prior_means += [np.atleast_1d(reg_model_fit.coef_)]
-        beta_prior_covars += [np.repeat(reg_model_err,
-                                        reg_model_fit.coef_.size)]
+
+        if not X_cond.empty:
+            # TODO: Could ask how this compares to the intercept-only model above.
+            reg_model_fit = reg_model.fit(X_cond, y_cond)
+            reg_model_err = np.atleast_1d(np.var(reg_model_fit.predict(X_cond) -
+                                                y_cond))
+            beta_prior_means += [np.atleast_1d(reg_model_fit.coef_)]
+            beta_prior_covars += [np.repeat(reg_model_err, N_beta)]
+        else:
+            beta_prior_means += [np.zeros(N_beta)]
+            # TODO: A better default for an "uninformed" initial value?
+            # This is really a job for a prior distribution.
+            beta_prior_covars += [100. * np.ones(N_beta)]
+
         obs_prior_vars[i] = this_cov
 
     init_params = NormalHMMInitialParams(alpha_trans_0, None, states_initial,
