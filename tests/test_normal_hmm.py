@@ -13,7 +13,7 @@ from amimodels.normal_hmm import (NormalHMMProcess, make_normal_hmm,
                                   gmm_norm_hmm_init_params,
                                   bic_norm_hmm_init_params,
                                   NormalHMMInitialParams,
-                                  calc_alpha_prior)
+                                  calc_alpha_prior, trace_sampler)
 from amimodels.step_methods import (
     TransProbMatStep,
     HMMStatesStep,
@@ -181,25 +181,15 @@ def test_degenerate(initialize_2_state_trans):
     assert_hpd(norm_hmm.betas[1], np.zeros(norm_hmm.betas[1].shape))
 
 
-#@pytest.mark.skip(reason="In progress...")
-def test_prediction(process_2_state_trans,
-                    mcmc_iters=200,
-                    progress_bar=False):
+def test_no_est(process_2_state_trans,
+                mcmc_iters=200,
+                progress_bar=False):
     """ Initialize a model with some good/correct values,
     do *not* estimate anything (i.e. don't use observations) and
     make sure that it can sample the model reasonably well.
-    These steps are similar to how we would produce posterior
-    predictive, or out-of-sample, values.
     """
 
     np.random.seed(2352523)
-
-    # TODO: testing; remove.
-    #from collections import namedtuple
-    #Request = namedtuple('Request', ['param'])
-    #r = Request(param=np.asarray([[0.9], [0.2]]))
-    #model_true = process_2_state_trans(r)
-    #states_true, y, X_matrices = model_true.simulate()
 
     states_true, y, X_matrices = process_2_state_trans.simulate()
     model_true = process_2_state_trans
@@ -237,6 +227,94 @@ def test_prediction(process_2_state_trans,
     assert_hpd(norm_hmm.states, states_true)
     assert_hpd(norm_hmm.betas[0], model_true.betas[0])
     assert_hpd(norm_hmm.betas[1], model_true.betas[1])
+
+
+@pytest.mark.skip(reason="In progress...")
+def test_prediction(process_2_state_trans,
+                    mcmc_iters=200,
+                    progress_bar=False):
+    """ Test out-of-sample/posterior predictive sampling.
+    """
+
+    np.random.seed(2352523)
+
+    # TODO: testing; remove.
+    #from collections import namedtuple
+    #Request = namedtuple('Request', ['param'])
+    #r = Request(param=np.asarray([[0.9], [0.2]]))
+    #model_true = process_2_state_trans(r)
+    #states_true, y, X_matrices = model_true.simulate()
+
+    #states_true, y, X_matrices = process_2_state_trans.simulate()
+    #model_true = process_2_state_trans
+
+    #y_obs = y
+    #N_states = len(X_matrices)
+    #N_obs = X_matrices[0].shape[0]
+    #trans_mat_full = np.column_stack(
+    #    (model_true.trans_mat, 1. - model_true.trans_mat.sum(axis=1)))
+
+    #alpha_trans = calc_alpha_prior(states_true, N_states,
+    #                               trans_mat_full)
+
+    #init_params = NormalHMMInitialParams(alpha_trans,
+    #                                     model_true.trans_mat,
+    #                                     states_true,
+    #                                     model_true.betas,
+    #                                     None,
+    #                                     model_true.Vs,
+    #                                     None)
+
+    N_obs = 200
+    y_obs = pd.DataFrame(np.ones(N_obs))
+    X_matrices = [pd.DataFrame(np.ones((N_obs, 1))),
+                  pd.DataFrame(np.ones((N_obs, 2)))]
+
+    # TODO: testing; remove.
+    init_params = gmm_norm_hmm_init_params(y_obs, X_matrices)
+
+    #init_params = initialize_2_state_trans(y_obs, X_matrices)
+
+    norm_hmm = make_normal_hmm(y_obs, X_matrices, init_params)
+    mcmc_step = pymc.MCMC(norm_hmm.variables)
+
+    mcmc_step.use_step_method(HMMStatesStep, norm_hmm.states)
+    mcmc_step.use_step_method(TransProbMatStep, norm_hmm.trans_mat)
+    for b_ in norm_hmm.betas:
+        mcmc_step.use_step_method(NormalNormalStep, b_)
+
+    mcmc_step.sample(mcmc_iters)
+
+    #assert_hpd(norm_hmm.trans_mat, model_true.trans_mat)
+    #assert_hpd(norm_hmm.states, states_true)
+    #assert_hpd(norm_hmm.betas[0], model_true.betas[0])
+    #assert_hpd(norm_hmm.betas[1], model_true.betas[1])
+
+    #
+    # Save the trace values for the variable we want
+    # to predict.
+    #
+    traces = {}
+    for stoch in norm_hmm.mu.extended_parents:
+        traces[stoch.__name__] = mcmc_step.trace(stoch).gettrace()
+
+    #
+    # Generate new design matrices for predictions over
+    # new time intervals.
+    #
+    model_true.start_datetime = pd.tslib.Timestamp(pd.datetime.now())
+    states_pred, y_pred, X_mat_pred = model_true.simulate()
+
+    # Initialize a new model using the new design matrices,
+    # but **not** the new observations.
+    norm_hmm_pred = make_normal_hmm(None, X_mat_pred, init_params)
+
+    ram_db = trace_sampler(norm_hmm_pred, 'mu', traces)
+
+    mu_pred = pd.DataFrame(ram_db.trace('mu').gettrace().mean(axis=0),
+                           index=y_pred.index, columns=['usage'])
+    # TODO: ?
+    #mu_pred - y_pred
 
 
 @slow

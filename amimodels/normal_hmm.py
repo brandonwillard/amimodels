@@ -15,6 +15,50 @@ from .hmm_utils import compute_trans_freqs, compute_steady_state
 from .deterministics import HMMLinearCombination
 
 
+def trace_sampler(model, stoch_name, traces, dbname=None):
+    """ Creates a PyMC ram database for stochastic
+    given a model and set of trace values for its parent
+    stochastics.
+
+    Parameters
+    ==========
+    model: pymc.Model object
+        The model object.
+    stoch: pymc.Stochastic
+        The stochastic for which we want values under the
+        given samples in `traces`.
+    traces: dict of str, numpy.ndarray
+        A dictionary of `stoch`'s parents' stochastic names
+        and trace values
+
+    Returns
+    =======
+    A pymc.database.ram.Database.
+
+    """
+    if dbname is None:
+        dbname = model.__name__
+
+    ram_db = pymc.database.ram.Database(dbname)
+
+    target_stoch = model.get_node(stoch_name)
+
+    stoch_value_fn = {'mu': target_stoch.get_value}
+
+    for stoch in target_stoch.extended_parents:
+        stoch_value_fn[stoch.__name__] = stoch.get_value
+
+    mcmc_iters = np.alen(traces.values()[0])
+    ram_db._initialize(stoch_value_fn, mcmc_iters)
+
+    for n in xrange(mcmc_iters):
+        for stoch in target_stoch.extended_parents:
+            stoch.value = traces[stoch.__name__][n]
+        ram_db.tally()
+
+    return ram_db
+
+
 class NormalHMMInitialParams(object):
     r"""An object that holds initial parameters for a
     normal-observations HMM.
