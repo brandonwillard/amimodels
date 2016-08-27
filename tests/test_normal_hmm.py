@@ -261,7 +261,7 @@ def test_missing_inference(model_true,
 
 
 @pytest.mark.skip(reason="In progress...")
-def test_prediction(init_func,
+def test_prediction(
                     mcmc_iters=200
                     ):
     """ Test out-of-sample/posterior predictive sampling.
@@ -281,19 +281,12 @@ def test_prediction(init_func,
     states_true, y, X_matrices = model_true.simulate()
     y_obs = y
 
-    #N_obs = 200
-    #y_obs = pd.DataFrame(np.ones(N_obs))
-    #X_matrices = [pd.DataFrame(np.ones((N_obs, 1))),
-    #              pd.DataFrame(np.ones((N_obs, 2)))]
-
-    init_params = None  #init_func(y_obs, X_matrices)
-
     # DEBUG: Trying to suss out a random numpy indexing warning.
     import warnings
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         #warnings.simplefilter("default")
-        norm_hmm = make_normal_hmm(y_obs, X_matrices, init_params)
+        norm_hmm = make_normal_hmm(y_obs, X_matrices)
 
     mcmc_step = pymc.MCMC(norm_hmm.variables)
 
@@ -321,28 +314,53 @@ def test_prediction(init_func,
     # Generate new design matrices for predictions over
     # new time intervals.
     #
-    model_true.start_datetime = y_obs.index[-1]  # pd.tslib.Timestamp(pd.datetime.now())
-    states_pred, y_pred, X_mat_pred = model_true.simulate()
+    model_true.start_datetime = y_obs.index[-1]
+    states_oos_df, y_oos_df, X_mat_pred = model_true.simulate()
 
     # Initialize a new model using the new design matrices,
     # but **not** the new observations.
-    norm_hmm_pred = make_normal_hmm(None, X_mat_pred, init_params)
+    norm_hmm_pred = make_normal_hmm(None, X_mat_pred)
 
     ram_db = trace_sampler(norm_hmm_pred, 'mu', traces)
 
-    mu_pred_df = pd.DataFrame(ram_db.trace('mu').gettrace().mean(axis=0),
-                              index=y_pred.index, columns=[r'$E[\mu_t]$ pred'])
-    states_pred_df = pd.DataFrame((ram_db.trace('states').gettrace() + 1).mean(axis=0),
-                                  index=y_pred.index, columns=[r'$E[S_t]$ pred'])
+    # DEBUG: Remove.
+    plot_mean_predictions(mcmc_step, ram_db, y_obs, y_oos_df)
+
+    # TODO: ?
+    #mu_pred_df - y_oos_df
+
+
+def plot_mean_predictions(mcmc_step, ram_db, y_obs, y_oos_df):
+    mu_pred_df = pd.DataFrame(ram_db.trace('mu').gettrace().T,
+                              index=y_oos_df.index)
+    mu_pred_mean_df = mu_pred_df.mean(axis=1)
+    mu_pred_mean_df.columns = [r'$E[\mu_t]$ pred']
+
+    states_pred_df = pd.DataFrame(ram_db.trace('states').gettrace().T,
+                                  index=y_oos_df.index) + 1
+    states_pred_mean = states_pred_df.mean(axis=0)
+    states_pred_mean_df = pd.DataFrame(states_pred_mean,
+                                       index=y_oos_df.index,
+                                       columns=[r'$E[S_t]$ pred'])
 
     from amimodels.hmm_utils import plot_hmm
     axes = None
     #_ = [ax_.clear() for ax_ in axes]
     axes = plot_hmm(mcmc_step, obs_index=y_obs.index, axes=axes)
 
-    mu_pred_df.plot(ax=axes[0], drawstyle='steps-mid')
-    states_pred_df.plot(ax=axes[1], drawstyle='steps-mid')
+    y_oos_df.columns = [r'$y_t$ o.o.s.']
+    y_oos_df.plot(ax=axes[0], drawstyle='steps-mid')
 
+    mu_pred_df.plot(ax=axes[0], drawstyle='steps-mid',
+                    alpha=8/mu_pred_df.shape[1],
+                    rasterized=True,
+                    legend=False)
 
-    # TODO: ?
-    #mu_pred - y_pred
+    #mu_pred_mean_df.plot(ax=axes[0], drawstyle='steps-mid')
+
+    states_pred_df.plot(ax=axes[1], drawstyle='steps-mid',
+                        alpha=8/mu_pred_df.shape[1],
+                        rasterized=True,
+                        legend=False)
+
+    #states_pred_mean_df.plot(ax=axes[1], drawstyle='steps-mid')

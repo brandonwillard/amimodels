@@ -129,15 +129,15 @@ class ExtStepMethod(pymc.StepMethod):
     r""" A pymc.StepMethod subclass that performs basic input consistency checks.
     """
 
-    child_class = None
-    target_class = None
+    child_classes = None
+    target_classes = None
     linear_OK = False
     strict_competence_match = False
 
     @classmethod
     def competence(cls, s):
 
-        if cls.strict_competence_match and isinstance(s, cls.target_class):
+        if cls.strict_competence_match and isinstance(s, cls.target_classes):
             return 3
         else:
             return 0
@@ -146,17 +146,17 @@ class ExtStepMethod(pymc.StepMethod):
 
         super(ExtStepMethod, self).__init__(variables, *args, **kwargs)
 
-        if self.target_class is not None and\
-                not all(isinstance(s_, self.target_class) for s_ in
+        if self.target_classes is not None and\
+                not all(isinstance(s_, self.target_classes) for s_ in
                         self.stochastics):
             raise NotImplementedError(("Step method only valid for {} target"
-                                       " classes".format(self.target_class)))
+                                       " classes".format(self.target_classes)))
 
-        if self.child_class is not None and\
-                not all([isinstance(c_, self.child_class) for c_ in
+        if self.child_classes is not None and\
+                not all([isinstance(c_, self.child_classes) for c_ in
                          self.children]):
             raise NotImplementedError(("Step method only valid for {} child"
-                                       " classes".format(self.child_class)))
+                                       " classes".format(self.child_classes)))
 
 
 class HMMStatesStep(ExtStepMethod):
@@ -188,9 +188,9 @@ class HMMStatesStep(ExtStepMethod):
     .. [fs] Sylvia Fruehwirth-Schnatter, "Markov chain Monte Carlo estimation of classical and dynamic switching and mixture models", Journal of the American Statistical Association 96 (2001): 194--209
 
     """
-    #child_class = pymc.Categorical
+    #child_classes = pymc.Categorical
     #parent_label = 'theta'
-    target_class = HMMStateSeq
+    target_classes = HMMStateSeq
     linear_OK = False
     strict_competence_match = True
 
@@ -369,9 +369,9 @@ class TransProbMatStep(ExtStepMethod):
     The :math:`N_{j,k}(S)` are counts of observed transitions :math:`j \to k`.
 
     '''
-    child_class = HMMStateSeq
+    child_classes = HMMStateSeq
     #parent_label = 'alpha'
-    target_class = TransProbMatrix
+    target_classes = TransProbMatrix
     linear_OK = False
     strict_competence_match = True
 
@@ -426,8 +426,8 @@ class NormalNormalStep(ExtStepMethod):
     the conjugate Bayes--or equivalently the Kalman--update.
 
     '''
-    child_class = pymc.Normal
-    target_class = pymc.Normal
+    child_classes = (pymc.Normal, pymc.TruncatedNormal)
+    target_classes = pymc.Normal
     linear_OK = True
 
     def __init__(self, variables, *args, **kwargs):
@@ -533,7 +533,12 @@ class NormalNormalStep(ExtStepMethod):
 
         tau_post = np.diag(tau_post)
 
-        self.stochastic.value = pymc.rnormal(mu=a_post, tau=tau_post)
+        if isinstance(self.y_beta, pymc.TruncatedNormal):
+            self.stochastic.value = pymc.rtruncated_normal(mu=a_post,
+                                                           tau=tau_post,
+                                                           a=0.)
+        else:
+            self.stochastic.value = pymc.rnormal(mu=a_post, tau=tau_post)
 
         # TODO: We should consider setting the stochastic's parents.
         # For example:

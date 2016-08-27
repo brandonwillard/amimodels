@@ -43,7 +43,7 @@ def plot_hmm(mcmc_step, obs_index=None, axes=None,
     y_df.plot(ax=axes[0], drawstyle='steps-mid', zorder=3)
 
     # Would be nice to have a y_rv.mean, or something.
-    if isinstance(y_rv, pymc.Normal):
+    if isinstance(y_rv, (pymc.Normal, pymc.Poisson, pymc.TruncatedNormal)):
         mu_rv = y_rv.parents['mu']
     elif len(y_rv.parents) == 1:
         mu_rv, = y_rv.parents.values()

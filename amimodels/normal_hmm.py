@@ -538,17 +538,24 @@ def make_normal_hmm(y_data, X_data, initial_params=None):
 
     .. math::
 
-        y_t &\sim \operatorname{N}(x_t^{(S_t)\top} \beta^{(S_t)}, V^{(S_t)}) \\
-        \beta^{(S_t)}_i &\sim \operatorname{N}(m^{(S_t)}, C^{(S_t)}), \quad i \in \{1,\dots,M\} \\
+        y_t &\sim \operatorname{N}^{+}(x_t^{(S_t)\top} \beta^{(S_t)}, V^{(S_t)}) \\
+        \beta^{(S_t)}_i &\sim \operatorname{N}(m^{(S_t)}, C^{(S_t)}),
+        \quad i \in \{1,\dots, M\} \\
         S_t \mid S_{t-1} &\sim \operatorname{Categorical}(\pi^{(S_{t-1})}) \\
         \pi^{(S_t-1)} &\sim \operatorname{Dirichlet}(\alpha^{(S_{t-1})})
 
-    where :math:`C^{(S_t)} = \lambda_i^{(S_t) 2} \tau^{(S_t) 2}` and
+    where :math:`\operatorname{N}_{+}` is the positive (truncated below zero)
+    normal distribution, :math:`S_t \in \{1, \ldots, K\}`,
+    :math:`C^{(S_t)} = \lambda_i^{(S_t) 2} \tau^{(S_t) 2}` and
 
     .. math::
 
-        \lambda^{(S_t)}_i &\sim \operatorname{Cauchy}^{+}(0, 1) \\
-        \tau^{(S_t)} &\sim \operatorname{Cauchy}^{+}(0, 1)
+        \lambda^{k}_i &\sim \operatorname{Cauchy}^{+}(0, 1) \\
+        \tau^{(k)} &\sim \operatorname{Cauchy}^{+}(0, 1) \\
+        V^{(k)} &\sim \operatorname{Gamma}(n_0/2, n_0 S_0/2)
+
+    for :math:`k \in \{1, \ldots, K\}`.
+
 
     for observations :math:`y_t` in :math:`t \in \{0, \dots, T\}`,
     features :math:`x_t^{(S_t)} \in \mathbb{R}^M`,
@@ -658,9 +665,10 @@ def make_normal_hmm(y_data, X_data, initial_params=None):
         y_data = np.ma.masked_invalid(y_data).astype(np.object)
         y_data.set_fill_value(None)
 
-    y_rv = pymc.Normal('y', mu, V_inv,
-                       value=y_data,
-                       observed=y_observed)
+    y_rv = pymc.TruncatedNormal('y', mu, V_inv,
+                                0., np.inf,
+                                value=y_data,
+                                observed=y_observed)
 
     return pymc.Model(locals())
 
