@@ -260,7 +260,7 @@ def test_missing_inference(model_true,
     assert_hpd(norm_hmm.trans_mat, model_true.trans_mat)
 
 
-#@pytest.mark.skip(reason="In progress...")
+@pytest.mark.skip(reason="In progress...")
 def test_prediction(init_func,
                     mcmc_iters=200
                     ):
