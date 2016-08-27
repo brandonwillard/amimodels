@@ -1,5 +1,7 @@
 from __future__ import division
 
+import sys
+
 import numpy as np
 import pymc
 
@@ -18,10 +20,11 @@ import warnings
 
 warnings.filterwarnings('always')
 
-slow = pytest.mark.skipif(
-    not pytest.config.getoption("--runslow"),
-    reason="need --runslow option to run"
-)
+if hasattr(sys, '_called_from_test'):
+    slow = pytest.mark.skipif(
+        not pytest.config.getoption("--runslow"),
+        reason="need --runslow option to run"
+    )
 
 
 def test_states_single_step():

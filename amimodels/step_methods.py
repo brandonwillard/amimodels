@@ -519,21 +519,15 @@ class NormalNormalStep(ExtStepMethod):
         tau_beta = bcast_beta * np.atleast_1d(getattr(self.tau_beta, 'value',
                                                       self.tau_beta))
 
-        # TODO: Do we ever want to consider non-constant tau_y?
-        tau_y = np.unique(getattr(self.tau_y, 'value', self.tau_y))
-
-        if np.alen(tau_y) > 1:
-            raise ValueError(("This step method doesn't handle non-scalar"
-                             " observation precision"))
+        tau_y = getattr(self.tau_y, 'value', self.tau_y)
 
         #
         # This is how we get the posterior mean:
         # C^{-1} m = R^{-1} a + F V^{-1} y
         #
-        rhs = np.dot(tau_beta, a_beta) + np.dot(X.T, y) * tau_y
+        rhs = np.dot(tau_beta, a_beta) + np.dot(X.T * tau_y, y)
 
-        # TODO: Are there really unnecessary products in this?
-        tau_post = np.diag(tau_beta) + np.dot(X.T, X) * tau_y
+        tau_post = np.diag(tau_beta) + np.dot(X.T * tau_y, X)
 
         a_post = np.linalg.solve(tau_post, rhs)
 

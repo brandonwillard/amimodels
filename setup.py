@@ -32,5 +32,7 @@ setup(name='amimodels',
       ],
       keywords='open energy efficiency ami modeling',
       packages=find_packages(),
+      setup_requires=['pytest-runner', ],
+      tests_requires=['pytest', ],
       install_requires=install_requires,
       )

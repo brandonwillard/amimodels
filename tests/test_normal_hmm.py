@@ -1,5 +1,7 @@
 from __future__ import division
 
+import sys
+
 import pandas as pd
 import numpy as np
 import pymc
@@ -19,10 +21,11 @@ from amimodels.step_methods import (
     HMMStatesStep,
     NormalNormalStep)
 
-slow = pytest.mark.skipif(
-    not pytest.config.getoption("--runslow"),
-    reason="need --runslow option to run"
-)
+if hasattr(sys, '_called_from_test'):
+    slow = pytest.mark.skipif(
+        not pytest.config.getoption("--runslow"),
+        reason="need --runslow option to run"
+    )
 
 
 @pytest.fixture(params=[np.asarray([[0.9], [0.2]]),
@@ -31,7 +34,7 @@ slow = pytest.mark.skipif(
                         np.asarray([[0.5], [0.5]]),
                         np.asarray([[0.9], [0.9]]),
                         np.asarray([[0.1], [0.3]])])
-def process_2_state_trans(request):
+def model_true(request):
     model_true = NormalHMMProcess(request.param,
                                   500,
                                   np.asarray([1., 0.]),
@@ -43,7 +46,7 @@ def process_2_state_trans(request):
 
 @pytest.fixture(params=[gmm_norm_hmm_init_params,
                         bic_norm_hmm_init_params])
-def initialize_2_state_trans(request):
+def init_func(request):
     return request.param
 
 
@@ -55,18 +58,18 @@ def test_compute_trans_freqs(test_input, expected):
                        compute_trans_freqs(test_input, 2, True).flatten())
 
 
-def test_observed_trans_probs(process_2_state_trans):
+def test_observed_trans_probs(model_true):
     """ Let's check some basic results regarding the simulated transition
     probabilities.  Specifically, how closely do the empirical values of
     :math: `P(S_t = i \mid S_{t-1}=j)` match the true ones?
     """
 
     np.random.seed(2352523)
-    states_true, y, X_matrices = process_2_state_trans.simulate()
+    states_true, y, X_matrices = model_true.simulate()
 
-    P_obs = compute_trans_freqs(states_true, process_2_state_trans.P.shape[0])
+    P_obs = compute_trans_freqs(states_true, model_true.P.shape[0])
     trans_mat_obs = P_obs[:, 0]
-    trans_mat_true = process_2_state_trans.trans_mat.flatten()
+    trans_mat_true = model_true.trans_mat.flatten()
 
     assert_array_less(np.abs(trans_mat_obs - trans_mat_true),
                       1./np.sqrt(states_true.size//2) +
@@ -75,18 +78,17 @@ def test_observed_trans_probs(process_2_state_trans):
 
 @pytest.mark.skip(reason="In progress...")
 @slow
-def test_estimated_trans_probs(process_2_state_trans,
-                               initialize_2_state_trans,
-                               mcmc_iters=2000,
-                               progress_bar=False):
+def test_estimated_trans_probs(model_true,
+                               init_func,
+                               mcmc_iters=2000):
     """ Check that the estimated mean transition probabilities
     are within range of the true ones.
     """
 
     np.random.seed(2352523)
-    states_true, y, X_matrices = process_2_state_trans.simulate()
+    states_true, y, X_matrices = model_true.simulate()
 
-    init_params = initialize_2_state_trans(y, X_matrices)
+    init_params = init_func(y, X_matrices)
 
     norm_hmm = make_normal_hmm(y, X_matrices, init_params)
 
@@ -99,10 +101,7 @@ def test_estimated_trans_probs(process_2_state_trans,
     for b_ in norm_hmm.betas:
         mcmc_step.use_step_method(NormalNormalStep, b_)
 
-    mcmc_step.sample(mcmc_iters,
-                     burn=mcmc_iters//2,
-                     progress_bar=progress_bar,
-                     verbose=0)
+    mcmc_step.sample(mcmc_iters)
 
     #if isinstance(trans_mat_step, pymc.StepMethods.Metropolis):
     #    assert trans_mat_step.ratio > 0.0,\
@@ -112,12 +111,12 @@ def test_estimated_trans_probs(process_2_state_trans,
     #    assert states_step.ratio > 0.0,\
     #        "states_step acceptance rate <= 0.0"
 
-    trans_mat_true = process_2_state_trans.trans_mat
+    trans_mat_true = model_true.trans_mat
 
     assert_hpd(norm_hmm.trans_mat, trans_mat_true, alpha=0.01)
 
 
-def test_missing_init(initialize_2_state_trans):
+def test_missing_init(init_func):
     """Test that initial states are sampled for masked/missing
     observations.
     """
@@ -137,12 +136,13 @@ def test_missing_init(initialize_2_state_trans):
     y_mask = y.eval('index > @baseline_end or index == index.min()')
     y_obs = y.mask(y_mask)
 
-    init_params = initialize_2_state_trans(y_obs, X_matrices)
+    init_params = init_func(y_obs, X_matrices)
 
     assert not any(init_params.states.isnull())
 
 
-def test_degenerate(initialize_2_state_trans):
+def test_degenerate(init_func,
+                    mcmc_iters=200):
     """Test that the initial value are reasonable for degenerate
     observations.
     """
@@ -152,7 +152,7 @@ def test_degenerate(initialize_2_state_trans):
     X_matrices = [pd.DataFrame(np.ones((N_obs, 1))),
                   pd.DataFrame(np.ones((N_obs, 2)))]
 
-    init_params = initialize_2_state_trans(y_obs, X_matrices)
+    init_params = init_func(y_obs, X_matrices)
 
     import collections
     for k, v in init_params.__dict__.items():
@@ -172,7 +172,6 @@ def test_degenerate(initialize_2_state_trans):
     for b_ in norm_hmm.betas:
         mcmc_step.use_step_method(NormalNormalStep, b_)
 
-    mcmc_iters = 200
     mcmc_step.sample(mcmc_iters)
 
     assert_hpd(norm_hmm.states, np.zeros(N_obs))
@@ -181,9 +180,8 @@ def test_degenerate(initialize_2_state_trans):
     assert_hpd(norm_hmm.betas[1], np.zeros(norm_hmm.betas[1].shape))
 
 
-def test_no_est(process_2_state_trans,
-                mcmc_iters=200,
-                progress_bar=False):
+def test_no_est(model_true,
+                mcmc_iters=200):
     """ Initialize a model with some good/correct values,
     do *not* estimate anything (i.e. don't use observations) and
     make sure that it can sample the model reasonably well.
@@ -191,8 +189,7 @@ def test_no_est(process_2_state_trans,
 
     np.random.seed(2352523)
 
-    states_true, y, X_matrices = process_2_state_trans.simulate()
-    model_true = process_2_state_trans
+    states_true, y, X_matrices = model_true.simulate()
 
     y_obs = None
     N_states = len(X_matrices)
@@ -229,53 +226,75 @@ def test_no_est(process_2_state_trans,
     assert_hpd(norm_hmm.betas[1], model_true.betas[1])
 
 
-@pytest.mark.skip(reason="In progress...")
-def test_prediction(process_2_state_trans,
-                    mcmc_iters=200,
-                    progress_bar=False):
+@slow
+def test_missing_inference(model_true,
+                           init_func,
+                           mcmc_iters=200):
+    """ Test that the estimation and initialization can handle missing data.
+    """
+
+    states_true, y, X_matrices = model_true.simulate()
+
+    baseline_end = y.index[int(y.size * 0.75)]
+    N_obs_half = y.size // 2
+    y_mask = y.eval('index > @baseline_end or index == index.min()\
+                    or index == index[@N_obs_half]')
+    y_obs = y.mask(y_mask)
+
+    init_params = init_func(y_obs, X_matrices)
+
+    norm_hmm = make_normal_hmm(y, X_matrices, init_params)
+
+    assert any(y_obs.isnull())
+
+    mcmc_step = pymc.MCMC(norm_hmm.variables)
+
+    mcmc_step.use_step_method(HMMStatesStep, norm_hmm.states)
+    mcmc_step.use_step_method(TransProbMatStep, norm_hmm.trans_mat)
+    for b_ in norm_hmm.betas:
+        mcmc_step.use_step_method(NormalNormalStep, b_)
+
+    mcmc_step.sample(mcmc_iters)
+
+    # TODO: Check all estimated quantities?
+    assert_hpd(norm_hmm.trans_mat, model_true.trans_mat)
+
+
+#@pytest.mark.skip(reason="In progress...")
+def test_prediction(init_func,
+                    mcmc_iters=200
+                    ):
     """ Test out-of-sample/posterior predictive sampling.
     """
 
     np.random.seed(2352523)
 
-    # TODO: testing; remove.
-    #from collections import namedtuple
-    #Request = namedtuple('Request', ['param'])
-    #r = Request(param=np.asarray([[0.9], [0.2]]))
-    #model_true = process_2_state_trans(r)
-    #states_true, y, X_matrices = model_true.simulate()
+    trans_mat = np.array([[0.9], [0.8]])
 
-    #states_true, y, X_matrices = process_2_state_trans.simulate()
-    #model_true = process_2_state_trans
+    model_true = NormalHMMProcess(trans_mat,
+                                  500,
+                                  np.asarray([1., 0.]),
+                                  np.asarray([[0.2], [1.]]),
+                                  np.asarray([0.1/8.**2, 0.5/3.**2]),
+                                  seed=249298)
 
-    #y_obs = y
-    #N_states = len(X_matrices)
-    #N_obs = X_matrices[0].shape[0]
-    #trans_mat_full = np.column_stack(
-    #    (model_true.trans_mat, 1. - model_true.trans_mat.sum(axis=1)))
+    states_true, y, X_matrices = model_true.simulate()
+    y_obs = y
 
-    #alpha_trans = calc_alpha_prior(states_true, N_states,
-    #                               trans_mat_full)
+    #N_obs = 200
+    #y_obs = pd.DataFrame(np.ones(N_obs))
+    #X_matrices = [pd.DataFrame(np.ones((N_obs, 1))),
+    #              pd.DataFrame(np.ones((N_obs, 2)))]
 
-    #init_params = NormalHMMInitialParams(alpha_trans,
-    #                                     model_true.trans_mat,
-    #                                     states_true,
-    #                                     model_true.betas,
-    #                                     None,
-    #                                     model_true.Vs,
-    #                                     None)
+    init_params = None  #init_func(y_obs, X_matrices)
 
-    N_obs = 200
-    y_obs = pd.DataFrame(np.ones(N_obs))
-    X_matrices = [pd.DataFrame(np.ones((N_obs, 1))),
-                  pd.DataFrame(np.ones((N_obs, 2)))]
+    # DEBUG: Trying to suss out a random numpy indexing warning.
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        #warnings.simplefilter("default")
+        norm_hmm = make_normal_hmm(y_obs, X_matrices, init_params)
 
-    # TODO: testing; remove.
-    init_params = gmm_norm_hmm_init_params(y_obs, X_matrices)
-
-    #init_params = initialize_2_state_trans(y_obs, X_matrices)
-
-    norm_hmm = make_normal_hmm(y_obs, X_matrices, init_params)
     mcmc_step = pymc.MCMC(norm_hmm.variables)
 
     mcmc_step.use_step_method(HMMStatesStep, norm_hmm.states)
@@ -302,7 +321,7 @@ def test_prediction(process_2_state_trans,
     # Generate new design matrices for predictions over
     # new time intervals.
     #
-    model_true.start_datetime = pd.tslib.Timestamp(pd.datetime.now())
+    model_true.start_datetime = y_obs.index[-1]  # pd.tslib.Timestamp(pd.datetime.now())
     states_pred, y_pred, X_mat_pred = model_true.simulate()
 
     # Initialize a new model using the new design matrices,
@@ -311,46 +330,19 @@ def test_prediction(process_2_state_trans,
 
     ram_db = trace_sampler(norm_hmm_pred, 'mu', traces)
 
-    mu_pred = pd.DataFrame(ram_db.trace('mu').gettrace().mean(axis=0),
-                           index=y_pred.index, columns=['usage'])
+    mu_pred_df = pd.DataFrame(ram_db.trace('mu').gettrace().mean(axis=0),
+                              index=y_pred.index, columns=[r'$E[\mu_t]$ pred'])
+    states_pred_df = pd.DataFrame((ram_db.trace('states').gettrace() + 1).mean(axis=0),
+                                  index=y_pred.index, columns=[r'$E[S_t]$ pred'])
+
+    from amimodels.hmm_utils import plot_hmm
+    axes = None
+    #_ = [ax_.clear() for ax_ in axes]
+    axes = plot_hmm(mcmc_step, obs_index=y_obs.index, axes=axes)
+
+    mu_pred_df.plot(ax=axes[0], drawstyle='steps-mid')
+    states_pred_df.plot(ax=axes[1], drawstyle='steps-mid')
+
+
     # TODO: ?
     #mu_pred - y_pred
-
-
-@slow
-def test_missing_inference(process_2_state_trans,
-                           initialize_2_state_trans,
-                           mcmc_iters=2000,
-                           progress_bar=False):
-    """ Test that the estimation and initialization can handle missing data.
-    """
-
-    states_true, y, X_matrices = model_true.simulate()
-
-    baseline_end = y.index[int(y.size * 0.75)]
-    N_obs_half = y.size // 2
-    y_mask = y.eval('index > @baseline_end or index == index.min()\
-                    or index == index[@N_obs_half]')
-    y_obs = y.mask(y_mask)
-
-    init_params = initialize_2_state_trans(y_obs, X_matrices)
-
-    norm_hmm = make_normal_hmm(y, X_matrices, init_params)
-
-    assert any(y_obs.isnull())
-
-    mcmc_step = pymc.MCMC(norm_hmm.variables)
-
-    mcmc_step.use_step_method(HMMStatesStep, norm_hmm.states)
-    mcmc_step.use_step_method(TransProbMatStep, norm_hmm.trans_mat)
-    for b_ in norm_hmm.betas:
-        mcmc_step.use_step_method(NormalNormalStep, b_)
-
-    mcmc_iters = 2000
-    progress_bar = True
-    mcmc_step.sample(mcmc_iters,
-                     burn=mcmc_iters//2,
-                     progress_bar=progress_bar)
-
-    # TODO: Check all estimated quantities?
-    assert_hpd(norm_hmm.trans_mat, model_true.trans_mat)

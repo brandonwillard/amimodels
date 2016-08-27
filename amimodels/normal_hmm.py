@@ -533,7 +533,7 @@ def bic_norm_hmm_init_params(y, X_matrices):
     return init_params
 
 
-def make_normal_hmm(y_data, X_data, initial_params):
+def make_normal_hmm(y_data, X_data, initial_params=None):
     r""" Construct a PyMC2 scalar normal-emmisions HMM model of the form
 
     .. math::
@@ -581,22 +581,43 @@ def make_normal_hmm(y_data, X_data, initial_params):
     N_states = len(X_data)
     N_obs = X_data[0].shape[0]
 
-    alpha_trans = initial_params.alpha_trans
+    if initial_params is not None:
+        alpha_trans = initial_params.alpha_trans
+        trans_mat_0 = initial_params.trans_mat
+        states_p_0 = initial_params.p0
+        states_0 = initial_params.states
+        betas_0 = [None] * N_states
+        for s in range(N_states):
+            betas_0[s] = initial_params.betas[s]
+
+        # TODO: Prior on observation variance?
+        y_covs_0 = initial_params.Vs
+
+    else:
+        alpha_trans = np.ones((N_states, N_states))
+        trans_mat_0 = None
+        states_p_0 = None
+        states_0 = None
+        betas_0 = [None] * N_states
+        Vs_n_0 = np.ones(N_states)
+        Vs_S_0 = np.ones(N_states)
+
+        # TODO: Prior on observation variance?
+        # XXX: This is completely arbitrary and **will**
+        # affect the model results substantially.
+        y_covs_0 = np.ones(N_states)
 
     trans_mat = TransProbMatrix("trans_mat", alpha_trans,
-                                value=initial_params.trans_mat)
+                                value=trans_mat_0)
 
-    states = HMMStateSeq("states", trans_mat, N_obs, p0=initial_params.p0,
-                         value=initial_params.states)
+    states = HMMStateSeq("states", trans_mat, N_obs,
+                         p0=states_p_0, value=states_0)
 
     betas = []
     etas = []
     lambdas = []
+    V_invs = np.array([None] * N_states, dtype=np.object)
     for s in range(N_states):
-
-        initial_beta = None
-        if initial_params.betas is not None:
-            initial_beta = initial_params.betas[s]
 
         size_s = X_data[s].shape[1]
         size_s = size_s if size_s > 1 else None
@@ -609,30 +630,37 @@ def make_normal_hmm(y_data, X_data, initial_params):
 
         beta_s = pymc.Normal('beta-{}'.format(s),
                              0., (lambda_s * eta_s)**(-2),
-                             value=initial_beta,
+                             value=betas_0[s],
                              size=size_s)
 
         betas += [beta_s]
         etas += [eta_s]
         lambdas += [lambda_s]
 
+        V_inv_s = pymc.Gamma('V-{}'.format(s),
+                             Vs_n_0[s]/2.,
+                             Vs_n_0[s] * Vs_S_0[s]/2.,
+                             value=y_covs_0[s])
+
+        V_invs[s] = V_inv_s
+
+    del s, beta_s, size_s, lambda_s, eta_s
+
     mu = HMMLinearCombination('mu', X_data, betas, states)
 
-    # TODO: Prior on observation variance?
-    Vs = initial_params.Vs
-
     @pymc.deterministic(trace=False, plot=False)
-    def V(states_=states, V_=Vs):
-        return V_[states_]
+    def V_inv(states_=states, V_invs_=V_invs):
+        return V_invs_[states_].astype(np.float)
 
+    y_observed = False
     if y_data is not None:
+        y_observed = True
         y_data = np.ma.masked_invalid(y_data).astype(np.object)
         y_data.set_fill_value(None)
 
-    y_rv = pymc.Normal('y', mu, 1./V, value=y_data,
-                       observed=True if y_data is not None else False)
-
-    del initial_params, s, beta_s, size_s, lambda_s, eta_s
+    y_rv = pymc.Normal('y', mu, V_inv,
+                       value=y_data,
+                       observed=y_observed)
 
     return pymc.Model(locals())
 
