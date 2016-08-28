@@ -5,7 +5,8 @@ import pymc
 
 
 def plot_hmm(mcmc_step, obs_index=None, axes=None,
-             smpl_subset=None, states_true=None):
+             smpl_subset=None, states_true=None,
+             plot_samples=True):
     r""" Plot the observations, estimated observation mean parameter's statistics
     and estimated state sequence statistics.
 
@@ -22,6 +23,9 @@ def plot_hmm(mcmc_step, obs_index=None, axes=None,
         the samples to plot; if None, plot all samples.
     states_true: pandas.DataFrame
         True states time series.
+    plot_samples: bool
+        If True, plot the individual sample values, along with the
+        means.
 
     Returns
     =======
@@ -30,7 +34,7 @@ def plot_hmm(mcmc_step, obs_index=None, axes=None,
     """
     if axes is None:
         from matplotlib.pylab import plt
-        fig, axes = plt.subplots(2, 1)
+        fig, axes = plt.subplots(2, 1, sharex=True)
 
     _ = [ax_.clear() for ax_ in axes]
 
@@ -50,23 +54,25 @@ def plot_hmm(mcmc_step, obs_index=None, axes=None,
     else:
         raise ValueError("Unsupported observation distribution")
 
-    N_samples = mcmc_step._iter
-    if smpl_subset is not None:
-        if isinstance(smpl_subset, float):
-            smpls_idx = np.random.randint(0, N_samples,
-                                          size=int(N_samples * smpl_subset))
+    if plot_samples:
+        N_samples = mcmc_step._iter
+        if smpl_subset is not None:
+            if isinstance(smpl_subset, float):
+                smpls_idx = np.random.randint(0, N_samples,
+                                              size=int(N_samples * smpl_subset))
+            else:
+                smpls_idx = smpl_subset
         else:
-            smpls_idx = smpl_subset
-    else:
-        smpls_idx = xrange(N_samples)
+            smpls_idx = xrange(N_samples)
 
-    mu_samples = mcmc_step.trace(mu_rv.__name__).gettrace()[smpls_idx].T
-    mu_df = pd.DataFrame(mu_samples, index=y_df.index)
+        mu_samples = mcmc_step.trace(mu_rv.__name__).gettrace()[smpls_idx].T
+        mu_df = pd.DataFrame(mu_samples, index=y_df.index)
 
-    mu_df.plot(ax=axes[0], zorder=1, drawstyle='steps-mid',
-               legend=False, color='lightgreen',
-               alpha=5. / len(smpls_idx), label=None,
-               rasterized=True)
+        mu_df.plot(ax=axes[0], zorder=1, drawstyle='steps-mid',
+                   legend=False, color='lightgreen',
+                   alpha=5. / len(smpls_idx), label=None,
+                   rasterized=True)
+
     mu_mean_df = pd.DataFrame(mcmc_step.trace(mu_rv.__name__).gettrace().mean(axis=0),
                               index=y_df.index,
                               columns=['$E[\mu_t \mid y_{1:T}]$'])
@@ -92,11 +98,13 @@ def plot_hmm(mcmc_step, obs_index=None, axes=None,
     states_rv, = filter(lambda x: isinstance(x, HMMStateSeq),
                         mcmc_step.stochastics)
 
-    state_samples = states_rv.trace.gettrace()[smpls_idx]
-    states_df = pd.DataFrame(state_samples.T, index=y_df.index) + 1
-    states_df.plot(ax=axes[1], zorder=1, alpha=0.5,
-                   drawstyle='steps-mid', legend=False,
-                   color='lightgreen', label=None)
+    if plot_samples:
+        state_samples = states_rv.trace.gettrace()[smpls_idx]
+        states_df = pd.DataFrame(state_samples.T, index=y_df.index) + 1
+        states_df.plot(ax=axes[1], zorder=1, alpha=0.5,
+                       drawstyle='steps-mid', legend=False,
+                       color='lightgreen', label=None)
+
     states_mean_df = pd.DataFrame(states_rv.trace.gettrace().mean(axis=0) + 1,
                                   index=y_df.index,
                                   columns=['$E[S_t \mid y_{1:T}]$'])

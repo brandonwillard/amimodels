@@ -28,6 +28,42 @@ if hasattr(sys, '_called_from_test'):
     )
 
 
+def plot_mean_predictions(mcmc_step, ram_db, y_obs, y_oos_df):
+    mu_pred_df = pd.DataFrame(ram_db.trace('mu').gettrace().T,
+                              index=y_oos_df.index)
+    mu_pred_mean_df = mu_pred_df.mean(axis=1)
+    mu_pred_mean_df.columns = [r'$E[\mu_t]$ pred']
+
+    states_pred_df = pd.DataFrame(ram_db.trace('states').gettrace().T,
+                                  index=y_oos_df.index) + 1
+    states_pred_mean = states_pred_df.mean(axis=0)
+    states_pred_mean_df = pd.DataFrame(states_pred_mean,
+                                       index=y_oos_df.index,
+                                       columns=[r'$E[S_t]$ pred'])
+
+    from amimodels.hmm_utils import plot_hmm
+    axes = None
+    #_ = [ax_.clear() for ax_ in axes]
+    axes = plot_hmm(mcmc_step, obs_index=y_obs.index, axes=axes)
+
+    y_oos_df.columns = [r'$y_t$ o.o.s.']
+    y_oos_df.plot(ax=axes[0], drawstyle='steps-mid')
+
+    mu_pred_df.plot(ax=axes[0], drawstyle='steps-mid',
+                    alpha=8/mu_pred_df.shape[1],
+                    rasterized=True,
+                    legend=False)
+
+    #mu_pred_mean_df.plot(ax=axes[0], drawstyle='steps-mid')
+
+    states_pred_df.plot(ax=axes[1], drawstyle='steps-mid',
+                        alpha=8/mu_pred_df.shape[1],
+                        rasterized=True,
+                        legend=False)
+
+    #states_pred_mean_df.plot(ax=axes[1], drawstyle='steps-mid')
+
+
 @pytest.fixture(params=[np.asarray([[0.9], [0.2]]),
                         np.asarray([[0.9], [0.2]]),
                         np.asarray([[0.1], [0.8]]),
@@ -152,25 +188,25 @@ def test_degenerate(init_func,
     X_matrices = [pd.DataFrame(np.ones((N_obs, 1))),
                   pd.DataFrame(np.ones((N_obs, 2)))]
 
-    init_params = init_func(y_obs, X_matrices)
+    #init_params = init_func(y_obs, X_matrices)
 
-    import collections
-    for k, v in init_params.__dict__.items():
-        if v is None:
-            continue
-        elif isinstance(v, collections.Iterable):
-            assert all([np.all(np.isfinite(v_)) for v_ in v])
-        else:
-            assert np.all(np.isfinite(v))
+    #import collections
+    #for k, v in init_params.__dict__.items():
+    #    if v is None:
+    #        continue
+    #    elif isinstance(v, collections.Iterable):
+    #        assert all([np.all(np.isfinite(v_)) for v_ in v])
+    #    else:
+    #        assert np.all(np.isfinite(v))
 
-    norm_hmm = make_normal_hmm(y_obs, X_matrices, init_params)
+    norm_hmm = make_normal_hmm(y_obs, X_matrices)#, init_params)
 
     mcmc_step = pymc.MCMC(norm_hmm.variables)
 
-    mcmc_step.use_step_method(HMMStatesStep, norm_hmm.states)
-    mcmc_step.use_step_method(TransProbMatStep, norm_hmm.trans_mat)
-    for b_ in norm_hmm.betas:
-        mcmc_step.use_step_method(NormalNormalStep, b_)
+    from itertools import chain
+    for e_ in chain(norm_hmm.etas, norm_hmm.lambdas):
+        mcmc_step.use_step_method(pymc.StepMethods.Metropolis,
+                                  e_, proposal_distribution='Prior')
 
     mcmc_step.sample(mcmc_iters)
 
@@ -269,7 +305,7 @@ def test_prediction(
 
     np.random.seed(2352523)
 
-    trans_mat = np.array([[0.9], [0.8]])
+    trans_mat = np.array([[0.9], [0.2]])
 
     model_true = NormalHMMProcess(trans_mat,
                                   500,
@@ -285,17 +321,36 @@ def test_prediction(
     import warnings
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        #warnings.simplefilter("default")
-        norm_hmm = make_normal_hmm(y_obs, X_matrices)
+        norm_hmm = make_normal_hmm(y_obs, X_matrices,
+                                   single_obs_var=False)
+
+    assert np.all(np.asarray(norm_hmm.betas.value) >= 0)
 
     mcmc_step = pymc.MCMC(norm_hmm.variables)
 
-    mcmc_step.use_step_method(HMMStatesStep, norm_hmm.states)
-    mcmc_step.use_step_method(TransProbMatStep, norm_hmm.trans_mat)
-    for b_ in norm_hmm.betas:
-        mcmc_step.use_step_method(NormalNormalStep, b_)
+    #mcmc_step.assign_step_methods()
+
+    #mcmc_step.use_step_method(HMMStatesStep, norm_hmm.states)
+    #mcmc_step.use_step_method(TransProbMatStep, norm_hmm.trans_mat)
+    #for b_ in norm_hmm.betas:
+    #    mcmc_step.use_step_method(NormalNormalStep, b_)
+
+    from itertools import chain
+    for e_ in chain(norm_hmm.etas, norm_hmm.lambdas):
+        mcmc_step.use_step_method(pymc.StepMethods.Metropolis,
+                                  e_, proposal_distribution='Prior')
 
     mcmc_step.sample(mcmc_iters)
+
+    #/home/bwillar0/.virtualenvs/amimodels-env/lib/python2.7/site-packages/pymc/database/ram.py
+    # DEBUG: Remove.
+    get_ipython().magic('matplotlib qt')
+    from amimodels.hmm_utils import plot_hmm
+    axes = None
+    if axes is not None:
+        _ = [ax_.clear() for ax_ in axes]
+    axes = plot_hmm(mcmc_step, obs_index=y_obs.index, axes=axes,
+                    plot_samples=False)
 
     #assert_hpd(norm_hmm.trans_mat, model_true.trans_mat)
     #assert_hpd(norm_hmm.states, states_true)
@@ -329,38 +384,3 @@ def test_prediction(
     # TODO: ?
     #mu_pred_df - y_oos_df
 
-
-def plot_mean_predictions(mcmc_step, ram_db, y_obs, y_oos_df):
-    mu_pred_df = pd.DataFrame(ram_db.trace('mu').gettrace().T,
-                              index=y_oos_df.index)
-    mu_pred_mean_df = mu_pred_df.mean(axis=1)
-    mu_pred_mean_df.columns = [r'$E[\mu_t]$ pred']
-
-    states_pred_df = pd.DataFrame(ram_db.trace('states').gettrace().T,
-                                  index=y_oos_df.index) + 1
-    states_pred_mean = states_pred_df.mean(axis=0)
-    states_pred_mean_df = pd.DataFrame(states_pred_mean,
-                                       index=y_oos_df.index,
-                                       columns=[r'$E[S_t]$ pred'])
-
-    from amimodels.hmm_utils import plot_hmm
-    axes = None
-    #_ = [ax_.clear() for ax_ in axes]
-    axes = plot_hmm(mcmc_step, obs_index=y_obs.index, axes=axes)
-
-    y_oos_df.columns = [r'$y_t$ o.o.s.']
-    y_oos_df.plot(ax=axes[0], drawstyle='steps-mid')
-
-    mu_pred_df.plot(ax=axes[0], drawstyle='steps-mid',
-                    alpha=8/mu_pred_df.shape[1],
-                    rasterized=True,
-                    legend=False)
-
-    #mu_pred_mean_df.plot(ax=axes[0], drawstyle='steps-mid')
-
-    states_pred_df.plot(ax=axes[1], drawstyle='steps-mid',
-                        alpha=8/mu_pred_df.shape[1],
-                        rasterized=True,
-                        legend=False)
-
-    #states_pred_mean_df.plot(ax=axes[1], drawstyle='steps-mid')

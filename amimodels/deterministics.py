@@ -66,6 +66,7 @@ class HMMLinearCombination(pymc.Deterministic):
                     for X_, b_ in zip(X_matrices, betas)]):
             raise ValueError("X_matrices and betas dimensions don't match")
 
+        # TODO: Change these to indices instead of boolean masks
         self.which_k = tuple()
         self.X_k_matrices = tuple()
         self.k_prods = tuple()
@@ -76,17 +77,20 @@ class HMMLinearCombination(pymc.Deterministic):
             def which_k_func(s_=states, k_=k):
                 return np.equal(k_, s_)
 
-            w_k = pymc.Lambda("w_{}".format(k), which_k_func)
+            w_k = pymc.Lambda("w_{}".format(k), which_k_func,
+                              trace=False)
 
             def X_k_func(X_=X_matrices[k], t_=w_k):
                 return X_[t_]
 
-            X_k_mat = pymc.Lambda("X_{}".format(k), X_k_func)
+            X_k_mat = pymc.Lambda("X_{}".format(k), X_k_func,
+                                  trace=False)
 
             this_beta = betas[k]
             k_p = pymc.LinearCombination("mu_{}".format(k),
                                          (X_k_mat,),
-                                         (this_beta,))
+                                         (this_beta,),
+                                         trace=False)
 
             self.which_k += (w_k,)
             self.X_k_matrices += (X_k_mat,)
@@ -101,9 +105,11 @@ class HMMLinearCombination(pymc.Deterministic):
                 res[idx] = k_p
             return res
 
+        parents = {'which_k': self.which_k, 'k_prods': self.k_prods}
         super(HMMLinearCombination, self).__init__(eval=eval_fun,
-                                                   doc="",
+                                                   doc=self.__doc__,
                                                    name=name,
-                                                   parents={'which_k': self.which_k,
-                                                            'k_prods': self.k_prods},
+                                                   parents=parents,
                                                    *args, **kwds)
+
+

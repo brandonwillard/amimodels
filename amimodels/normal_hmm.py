@@ -5,9 +5,10 @@ PyMC.
 
 .. moduleauthor:: Brandon T. Willard
 """
-import patsy
-import pandas as pd
 import numpy as np
+import scipy
+import pandas as pd
+import patsy
 import pymc
 
 from .stochastics import HMMStateSeq, TransProbMatrix
@@ -254,8 +255,10 @@ class NormalHMMProcess(object):
             mu_now = np.dot(X_matrices[state_now].iloc[t, :],
                             self.betas[state_now])
 
-            usage_sim[t] = self.rng.normal(mu_now,
-                                           np.sqrt(self.Vs[state_now]))
+            usage_sim[t] = scipy.stats.truncnorm.rvs(0., np.inf,
+                                                     loc=mu_now,
+                                                     scale=np.sqrt(self.Vs[state_now]),
+                                                     random_state=self.rng)
 
         y = pd.DataFrame(usage_sim, index=index_sim, columns=["usage"])
 
@@ -533,7 +536,7 @@ def bic_norm_hmm_init_params(y, X_matrices):
     return init_params
 
 
-def make_normal_hmm(y_data, X_data, initial_params=None):
+def make_normal_hmm(y_data, X_data, initial_params=None, single_obs_var=False):
     r""" Construct a PyMC2 scalar normal-emmisions HMM model of the form
 
     .. math::
@@ -579,6 +582,9 @@ def make_normal_hmm(y_data, X_data, initial_params=None):
     initial_params: NormalHMMInitialParams
         The initial parameters, which include
         :math:`\pi_0, m^{(k)}, \alpha^{(k)}, V^{(k)}`.
+    single_obs_var: bool
+        Determines whether there are multiple observation variances or not.
+        Only used when not given intial parameters.
 
     Returns
     =======
@@ -593,26 +599,28 @@ def make_normal_hmm(y_data, X_data, initial_params=None):
         trans_mat_0 = initial_params.trans_mat
         states_p_0 = initial_params.p0
         states_0 = initial_params.states
-        betas_0 = [None] * N_states
-        for s in range(N_states):
-            betas_0[s] = initial_params.betas[s]
+        betas_0 = getattr(initial_params, 'betas',
+                          [np.ones(X_.shape[1]) for X_ in X_data])
 
-        # TODO: Prior on observation variance?
-        y_covs_0 = initial_params.Vs
+        Vs_n_0 = getattr(initial_params, 'Vs_n',
+                         np.ones(1 if single_obs_var else N_states))
+        Vs_S_0 = getattr(initial_params, 'Vs_S',
+                         np.ones(1 if single_obs_var else N_states))
+        y_covs_0 = getattr(initial_params, 'Vs',
+        #                   None if single_obs_var else [None] * N_states)
+                           np.ones(1 if single_obs_var else N_states))
 
     else:
         alpha_trans = np.ones((N_states, N_states))
         trans_mat_0 = None
         states_p_0 = None
         states_0 = None
-        betas_0 = [None] * N_states
-        Vs_n_0 = np.ones(N_states)
-        Vs_S_0 = np.ones(N_states)
+        betas_0 = [np.ones(X_.shape[1]) for X_ in X_data]
 
-        # TODO: Prior on observation variance?
-        # XXX: This is completely arbitrary and **will**
-        # affect the model results substantially.
-        y_covs_0 = np.ones(N_states)
+        Vs_n_0 = np.ones(1 if single_obs_var else N_states)
+        Vs_S_0 = np.ones(1 if single_obs_var else N_states)
+        #y_covs_0 = None if single_obs_var else [None] * N_states
+        y_covs_0 = np.ones(1 if single_obs_var else N_states)
 
     trans_mat = TransProbMatrix("trans_mat", alpha_trans,
                                 value=trans_mat_0)
@@ -620,44 +628,88 @@ def make_normal_hmm(y_data, X_data, initial_params=None):
     states = HMMStateSeq("states", trans_mat, N_obs,
                          p0=states_p_0, value=states_0)
 
-    betas = []
-    etas = []
-    lambdas = []
-    V_invs = np.array([None] * N_states, dtype=np.object)
-    for s in range(N_states):
+    beta_list = ()
+    eta_list = ()
+    lambda_list = ()
+    beta_tau_list = ()
 
-        size_s = X_data[s].shape[1]
-        size_s = size_s if size_s > 1 else None
+    # This is a dynamic list of the time indices allocated to each state.
+    # Very useful for breaking quantities mixtures into separate,
+    # easy to handle problems.
+    state_obs_idx = ()
+    for k in range(N_states):
 
-        lambda_s = pymc.HalfCauchy('lambda-{}'.format(s),
-                                   0., 1., size=size_s)
+        def k_idx_func(s_=states, k_=k):
+            return np.flatnonzero(k_ == s_)
 
-        eta_s = pymc.HalfCauchy('tau-{}'.format(s),
+        # XXX: Can't trace these Deterministics, since they
+        # change shape.
+        k_idx = pymc.Lambda("state-idx-{}".format(k),
+                            k_idx_func, trace=False)
+
+        state_obs_idx += (k_idx,)
+
+        size_k = X_data[k].shape[1]
+        size_k = size_k if size_k > 1 else None
+
+        lambda_k = pymc.HalfCauchy('lambda-{}'.format(k),
+                                   0., 1., size=size_k)
+
+        eta_k = pymc.HalfCauchy('eta-{}'.format(k),
                                 0., 1.)
 
-        beta_s = pymc.Normal('beta-{}'.format(s),
-                             0., (lambda_s * eta_s)**(-2),
-                             value=betas_0[s],
-                             size=size_s)
+        beta_tau_k = (lambda_k * eta_k)**(-2)
 
-        betas += [beta_s]
-        etas += [eta_s]
-        lambdas += [lambda_s]
+        beta_k = pymc.Normal('beta-{}'.format(k),
+                             0., beta_tau_k,
+                             value=betas_0[k],
+                             size=size_k)
 
-        V_inv_s = pymc.Gamma('V-{}'.format(s),
-                             Vs_n_0[s]/2.,
-                             Vs_n_0[s] * Vs_S_0[s]/2.,
-                             value=y_covs_0[s])
+        #beta_k = pymc.TruncatedNormal('beta-{}'.format(k),
+        #                              0, beta_tau_k,
+        #                              0, np.inf,
+        #                              value=betas_0[k],
+        #                              size=size_k)
 
-        V_invs[s] = V_inv_s
+        beta_list += (beta_k,)
+        eta_list += (eta_k,)
+        lambda_list += (lambda_k,)
+        beta_tau_list += (beta_tau_k,)
 
-    del s, beta_s, size_s, lambda_s, eta_s
+        del beta_k, size_k, beta_tau_k, lambda_k, eta_k, k_idx
+
+    del k
+
+    # These containers are handy, but not necessary.
+    betas = pymc.TupleContainer(beta_list)
+    etas = pymc.TupleContainer(eta_list)
+    lambdas = pymc.TupleContainer(lambda_list)
+    beta_taus = pymc.TupleContainer(beta_tau_list)
+
+    del beta_list, eta_list, lambda_list, beta_tau_list
+
+    V_inv_list = [pymc.Gamma('V-{}'.format(k),
+                             n_0/2., n_0 * S_0/2.,
+                             value=V_0)
+                  for k, (V_0, n_0, S_0) in
+                  enumerate(zip(y_covs_0, Vs_n_0, Vs_S_0))]
+
+    V_invs = pymc.ArrayContainer(np.array(V_inv_list, dtype=np.object))
+
+    del V_inv_list
 
     mu = HMMLinearCombination('mu', X_data, betas, states)
 
-    @pymc.deterministic(trace=False, plot=False)
-    def V_inv(states_=states, V_invs_=V_invs):
-        return V_invs_[states_].astype(np.float)
+    if np.alen(V_invs) == 1:
+        V_inv = V_invs[0]
+    else:
+        # This is a sort of hack...
+        for k, V_ in enumerate(V_invs):
+            V_.obs_idx = state_obs_idx[k]
+
+        @pymc.deterministic(trace=False, plot=False)
+        def V_inv(states_=states, V_invs_=V_invs):
+            return V_invs_[states_].astype(np.float)
 
     y_observed = False
     if y_data is not None:
@@ -665,21 +717,30 @@ def make_normal_hmm(y_data, X_data, initial_params=None):
         y_data = np.ma.masked_invalid(y_data).astype(np.object)
         y_data.set_fill_value(None)
 
-    y_rv = pymc.TruncatedNormal('y', mu, V_inv,
-                                0., np.inf,
-                                value=y_data,
-                                observed=y_observed)
+    y_rv = pymc.Normal('y', mu, V_inv,
+                       value=y_data,
+                       observed=y_observed)
+
+    #y_rv = pymc.TruncatedNormal('y', mu, V_inv,
+    #                            0., np.inf,
+    #                            value=y_data,
+    #                            observed=y_observed)
 
     return pymc.Model(locals())
 
 
 def make_poisson_hmm(y_data, X_data, initial_params):
-    r""" Construct a PyMC2 scalar poisson-emmisions HMM model of the form
+    r""" Construct a PyMC2 scalar poisson-emmisions HMM model.
+
+    TODO: Update to match normal model design.
+
+    The model takes the following form:
 
     .. math::
 
         y_t &\sim \operatorname{Poisson}(\exp(x_t^{(S_t)\top} \beta^{(S_t)})) \\
-        \beta^{(S_t)}_i &\sim \operatorname{N}(m^{(S_t)}, C^{(S_t)}), \quad i \in \{1,\dots,M\} \\
+        \beta^{(S_t)}_i &\sim \operatorname{N}(m^{(S_t)}, C^{(S_t)}),
+        \quad i \in \{1,\dots,M\} \\
         S_t \mid S_{t-1} &\sim \operatorname{Categorical}(\pi^{(S_{t-1})}) \\
         \pi^{(S_t-1)} &\sim \operatorname{Dirichlet}(\alpha^{(S_{t-1})})
 
@@ -692,7 +753,8 @@ def make_poisson_hmm(y_data, X_data, initial_params):
 
     for observations :math:`y_t` in :math:`t \in \{0, \dots, T\}`,
     features :math:`x_t^{(S_t)} \in \mathbb{R}^M`,
-    regression parameters :math:`\beta^{(S_t)}`, state sequences :math:`\{S_t\}^T_{t=1}` and
+    regression parameters :math:`\beta^{(S_t)}`, state sequences
+    :math:`\{S_t\}^T_{t=1}` and
     state transition probabilities :math:`\pi \in [0, 1]^{K}`.
     :math:`\operatorname{Cauchy}^{+}` is the standard half-Cauchy distribution
     and :math:`\operatorname{N}` is the normal/Gaussian distribution.
