@@ -327,15 +327,7 @@ def test_prediction(
         norm_hmm = make_normal_hmm(y_obs, X_matrices,
                                    single_obs_var=False)
 
-    assert np.all(np.asarray(norm_hmm.betas.value) >= 0)
-
     mcmc_step = pymc.MCMC(norm_hmm.variables)
-
-    #mcmc_step.assign_step_methods()
-    #mcmc_step.use_step_method(HMMStatesStep, norm_hmm.states)
-    #mcmc_step.use_step_method(TransProbMatStep, norm_hmm.trans_mat)
-    #for b_ in norm_hmm.betas:
-    #    mcmc_step.use_step_method(NormalNormalStep, b_)
 
     from itertools import chain
     for e_ in chain(norm_hmm.etas, norm_hmm.lambdas):
@@ -344,7 +336,6 @@ def test_prediction(
 
     mcmc_step.sample(mcmc_iters)
 
-    #/home/bwillar0/.virtualenvs/amimodels-env/lib/python2.7/site-packages/pymc/database/ram.py
     # DEBUG: Remove.
     get_ipython().magic('matplotlib qt')
     from amimodels.hmm_utils import plot_hmm
@@ -354,8 +345,8 @@ def test_prediction(
     axes = plot_hmm(mcmc_step, obs_index=y_obs.index, axes=axes,
                     plot_samples=False)
 
-    #assert_hpd(norm_hmm.trans_mat, model_true.trans_mat)
-    #assert_hpd(norm_hmm.states, states_true)
+    assert_hpd(norm_hmm.trans_mat, model_true.trans_mat)
+    assert_hpd(norm_hmm.states, states_true)
     #assert_hpd(norm_hmm.betas[0], model_true.betas[0])
     #assert_hpd(norm_hmm.betas[1], model_true.betas[1])
 
@@ -363,7 +354,8 @@ def test_prediction(
     # Save the trace values for the variable we want
     # to predict.
     #
-    non_time_parents = get_stochs_excluding(norm_hmm.mu, set(('states', 'N_obs')))
+    non_time_parents = get_stochs_excluding(norm_hmm.mu,
+                                            set(('states', 'N_obs')))
     traces = {}
     for stoch in non_time_parents:
         traces[stoch.__name__] = mcmc_step.trace(stoch).gettrace()
@@ -385,6 +377,9 @@ def test_prediction(
     # DEBUG: Remove.
     #plot_mean_predictions(mcmc_step, ram_db, y_obs, y_oos_df)
 
-    # TODO: ?
-    #mu_pred_df - y_oos_df
+    mu_pred_df = pd.DataFrame(ram_db.trace('mu').gettrace().T,
+                              index=y_oos_df.index)
+    # TODO: Not easy to compare these unless we have very strong
+    # predictors.  Even then, the states will vary freely.
+    #sqrd_err = np.abs(mu_pred_df.values - y_oos_df.values).mean()
 

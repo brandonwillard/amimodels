@@ -626,33 +626,36 @@ def make_normal_hmm(y_data, X_data, initial_params=None, single_obs_var=False):
     N_states = len(X_data)
     N_obs = X_data[0].shape[0]
 
-    if initial_params is not None:
-        alpha_trans = initial_params.alpha_trans
-        trans_mat_0 = initial_params.trans_mat
-        states_p_0 = initial_params.p0
-        states_0 = initial_params.states
-        betas_0 = getattr(initial_params, 'betas',
-                          [np.ones(X_.shape[1]) for X_ in X_data])
+    alpha_trans = getattr(initial_params, 'alpha_trans', None)
+    trans_mat_0 = getattr(initial_params, 'trans_mat', None)
+    states_p_0 = getattr(initial_params, 'p0', None)
+    states_0 = getattr(initial_params, 'states', None)
+    betas_0 = getattr(initial_params, 'betas', [None]*N_states)
+    V_invs_n_0 = getattr(initial_params, 'Vs_n', None)
+    V_invs_S_0 = getattr(initial_params, 'Vs_S', None)
+    V_invs_0 = getattr(initial_params, 'Vs', None)
 
-        Vs_n_0 = getattr(initial_params, 'Vs_n',
-                         np.ones(1 if single_obs_var else N_states))
-        Vs_S_0 = getattr(initial_params, 'Vs_S',
-                         np.ones(1 if single_obs_var else N_states))
-        y_covs_0 = getattr(initial_params, 'Vs',
-        #                   None if single_obs_var else [None] * N_states)
-                           np.ones(1 if single_obs_var else N_states))
-
-    else:
+    #
+    # Some parameters can be set to arguably generic values
+    # when no initial parameters are explicitly given.
+    #
+    if alpha_trans is None:
         alpha_trans = np.ones((N_states, N_states))
-        trans_mat_0 = None
-        states_p_0 = None
-        states_0 = None
-        betas_0 = [np.ones(X_.shape[1]) for X_ in X_data]
 
-        Vs_n_0 = np.ones(1 if single_obs_var else N_states)
-        Vs_S_0 = np.ones(1 if single_obs_var else N_states)
-        #y_covs_0 = None if single_obs_var else [None] * N_states
-        y_covs_0 = np.ones(1 if single_obs_var else N_states)
+    #if betas_0 is None:
+    #    betas_0 = [np.ones(X_.shape[1]) for X_ in X_data]
+
+    if V_invs_n_0 is None or V_invs_S_0 is None:
+        V_invs_shape = (1 if single_obs_var else N_states,)
+        if y_data is not None:
+            V_invs_n_0 = np.tile(1, V_invs_shape)
+            S_obs = float(np.var(y_data))
+            V_invs_S_0 = np.tile(S_obs, V_invs_shape)
+            V_invs_0 = np.tile(S_obs, V_invs_shape)
+        else:
+            V_invs_n_0 = np.ones(1)
+            V_invs_S_0 = np.tile(1e-3, V_invs_shape)
+            V_invs_0 = np.ones(V_invs_shape)
 
     trans_mat = TransProbMatrix("trans_mat", alpha_trans,
                                 value=trans_mat_0)
@@ -722,9 +725,9 @@ def make_normal_hmm(y_data, X_data, initial_params=None, single_obs_var=False):
 
     V_inv_list = [pymc.Gamma('V-{}'.format(k),
                              n_0/2., n_0 * S_0/2.,
-                             value=V_0)
-                  for k, (V_0, n_0, S_0) in
-                  enumerate(zip(y_covs_0, Vs_n_0, Vs_S_0))]
+                             value=V_inv_0)
+                  for k, (V_inv_0, n_0, S_0) in
+                  enumerate(zip(V_invs_0, V_invs_n_0, V_invs_S_0))]
 
     V_invs = pymc.ArrayContainer(np.array(V_inv_list, dtype=np.object))
 
