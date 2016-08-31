@@ -16,7 +16,27 @@ from .hmm_utils import compute_trans_freqs, compute_steady_state
 from .deterministics import HMMLinearCombination
 
 
-def trace_sampler(model, stoch_name, traces, dbname=None):
+def get_stochs_excluding(stoch, excluding):
+    """ Get the parents of a stochastic excluding the given
+    list of stochastic and/or parent names.
+
+    Parameters
+    ==========
+    stoch: pymc.Stochastic
+        Root stochastic/node.
+    excluding: list of str
+        Stochastic/node and parent names to exclude.
+    """
+    res = set()
+    for s_ in stoch.extended_parents:
+        if s_.__name__ in excluding or set(s_.parents.keys()) & excluding:
+            res |= get_stochs_excluding(s_, excluding)
+        else:
+            res.add(s_)
+    return res
+
+
+def trace_sampler(model, stoch, traces, dbname=None):
     """ Creates a PyMC ram database for stochastic
     given a model and set of trace values for its parent
     stochastics.
@@ -25,8 +45,8 @@ def trace_sampler(model, stoch_name, traces, dbname=None):
     ==========
     model: pymc.Model object
         The model object.
-    stoch: pymc.Stochastic
-        The stochastic for which we want values under the
+    stoch: pymc.Stochastic or str
+        The stochastic, or name, for which we want values under the
         given samples in `traces`.
     traces: dict of str, numpy.ndarray
         A dictionary of `stoch`'s parents' stochastic names
@@ -42,19 +62,31 @@ def trace_sampler(model, stoch_name, traces, dbname=None):
 
     ram_db = pymc.database.ram.Database(dbname)
 
+    if isinstance(stoch, pymc.Node):
+        stoch_name = stoch.__name__
+    else:
+        stoch_name = stoch
+
     target_stoch = model.get_node(stoch_name)
 
     stoch_value_fn = {'mu': target_stoch.get_value}
 
-    for stoch in target_stoch.extended_parents:
-        stoch_value_fn[stoch.__name__] = stoch.get_value
+    stochs_to_set = set(filter(lambda x: x.__name__ in traces.keys(),
+                               model.nodes))
+
+    stochs_to_get = target_stoch.extended_parents - stochs_to_set
+
+    for s_ in stochs_to_set | stochs_to_get:
+        stoch_value_fn[s_.__name__] = s_.get_value
 
     mcmc_iters = np.alen(traces.values()[0])
     ram_db._initialize(stoch_value_fn, mcmc_iters)
 
     for n in xrange(mcmc_iters):
-        for stoch in target_stoch.extended_parents:
-            stoch.value = traces[stoch.__name__][n]
+        for s_ in stochs_to_set:
+            s_.value = traces[s_.__name__][n]
+        for s_ in stochs_to_get:
+            _ = s_.random()
         ram_db.tally()
 
     return ram_db

@@ -45,6 +45,16 @@ def read_meter_data(trace_filename, project_info_filename,
     """
     from eemeter.meter import DataCollection, DataContainer
     from eemeter.parsers import ESPIUsageParser
+
+    # TODO: New API.
+    #from eemeter.structures import (
+    #    EnergyTrace,
+    #    EnergyTraceSet,
+    #    Intervention,
+    #    ZIPCodeSite,
+    #    Project
+    #)
+    #from eemeter.io.parsers import ESPIUsageParser
     from eemeter.weather import ISDWeatherSource
     import pandas as pd
     import os

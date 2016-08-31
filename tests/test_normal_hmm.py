@@ -15,7 +15,8 @@ from amimodels.normal_hmm import (NormalHMMProcess, make_normal_hmm,
                                   gmm_norm_hmm_init_params,
                                   bic_norm_hmm_init_params,
                                   NormalHMMInitialParams,
-                                  calc_alpha_prior, trace_sampler)
+                                  calc_alpha_prior, trace_sampler,
+                                  get_stochs_excluding)
 from amimodels.step_methods import (
     TransProbMatStep,
     HMMStatesStep,
@@ -36,7 +37,7 @@ def plot_mean_predictions(mcmc_step, ram_db, y_obs, y_oos_df):
 
     states_pred_df = pd.DataFrame(ram_db.trace('states').gettrace().T,
                                   index=y_oos_df.index) + 1
-    states_pred_mean = states_pred_df.mean(axis=0)
+    states_pred_mean = states_pred_df.mean(axis=1)
     states_pred_mean_df = pd.DataFrame(states_pred_mean,
                                        index=y_oos_df.index,
                                        columns=[r'$E[S_t]$ pred'])
@@ -51,17 +52,19 @@ def plot_mean_predictions(mcmc_step, ram_db, y_obs, y_oos_df):
 
     mu_pred_df.plot(ax=axes[0], drawstyle='steps-mid',
                     alpha=8/mu_pred_df.shape[1],
-                    rasterized=True,
+                    rasterized=True, color='lightgreen',
                     legend=False)
 
-    #mu_pred_mean_df.plot(ax=axes[0], drawstyle='steps-mid')
+    mu_pred_mean_df.plot(ax=axes[0], drawstyle='steps-mid',
+                         color='green')
 
     states_pred_df.plot(ax=axes[1], drawstyle='steps-mid',
                         alpha=8/mu_pred_df.shape[1],
-                        rasterized=True,
+                        rasterized=True, color='lightgreen',
                         legend=False)
 
-    #states_pred_mean_df.plot(ax=axes[1], drawstyle='steps-mid')
+    states_pred_mean_df.plot(ax=axes[1], drawstyle='steps-mid',
+                             color='green')
 
 
 @pytest.fixture(params=[np.asarray([[0.9], [0.2]]),
@@ -329,7 +332,6 @@ def test_prediction(
     mcmc_step = pymc.MCMC(norm_hmm.variables)
 
     #mcmc_step.assign_step_methods()
-
     #mcmc_step.use_step_method(HMMStatesStep, norm_hmm.states)
     #mcmc_step.use_step_method(TransProbMatStep, norm_hmm.trans_mat)
     #for b_ in norm_hmm.betas:
@@ -361,8 +363,9 @@ def test_prediction(
     # Save the trace values for the variable we want
     # to predict.
     #
+    non_time_parents = get_stochs_excluding(norm_hmm.mu, set(('states', 'N_obs')))
     traces = {}
-    for stoch in norm_hmm.mu.extended_parents:
+    for stoch in non_time_parents:
         traces[stoch.__name__] = mcmc_step.trace(stoch).gettrace()
 
     #
@@ -370,6 +373,7 @@ def test_prediction(
     # new time intervals.
     #
     model_true.start_datetime = y_obs.index[-1]
+    model_true.N_obs = model_true.N_obs // 2
     states_oos_df, y_oos_df, X_mat_pred = model_true.simulate()
 
     # Initialize a new model using the new design matrices,
@@ -379,7 +383,7 @@ def test_prediction(
     ram_db = trace_sampler(norm_hmm_pred, 'mu', traces)
 
     # DEBUG: Remove.
-    plot_mean_predictions(mcmc_step, ram_db, y_obs, y_oos_df)
+    #plot_mean_predictions(mcmc_step, ram_db, y_obs, y_oos_df)
 
     # TODO: ?
     #mu_pred_df - y_oos_df

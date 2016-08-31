@@ -184,6 +184,10 @@ class ExtStepMethod(pymc.StepMethod):
 
     @classmethod
     def competence(cls, s):
+        """ This class method checks that target and child classes
+        match for the given step function.
+        We have to do some work to get the (potential) child classes, though.
+        """
 
         if not np.iterable(s) or isinstance(s, pymc.Node):
             s = [s]
@@ -191,17 +195,20 @@ class ExtStepMethod(pymc.StepMethod):
         if cls.strict_competence_match and\
                 all(isinstance(s_, cls.target_classes) for s_ in s):
 
+            # No children?
+            if len(cls.child_classes) == 0:
+                return 0
+
             from itertools import chain, ifilter
             s_children = chain(*(s_.extended_children | s_.children
                                  for s_ in s))
             s_obs_children = ifilter(lambda x: getattr(x, 'observed', False),
                                      s_children)
-            if (not len(s_obs_children) > 0) or len(cls.child_classes) == 0:
-                return 0
+            children_check = [isinstance(oc, cls.child_classes)
+                              for oc in s_obs_children]
 
             # TODO: Might want to relax these observed children constraints.
-            if not all(isinstance(oc, cls.child_classes)
-                       for oc in s_obs_children):
+            if not len(children_check) > 0 and not all(children_check):
                 return 0
 
             if not cls.valid_stochastic(s, s_obs_children):
