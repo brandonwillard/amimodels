@@ -568,7 +568,8 @@ def bic_norm_hmm_init_params(y, X_matrices):
     return init_params
 
 
-def make_normal_hmm(y_data, X_data, initial_params=None, single_obs_var=False):
+def make_normal_hmm(y_data, X_data, initial_params=None, single_obs_var=False,
+                    include_ppy=False):
     r""" Construct a PyMC2 scalar normal-emmisions HMM model of the form
 
     .. math::
@@ -614,9 +615,13 @@ def make_normal_hmm(y_data, X_data, initial_params=None, single_obs_var=False):
     initial_params: NormalHMMInitialParams
         The initial parameters, which include
         :math:`\pi_0, m^{(k)}, \alpha^{(k)}, V^{(k)}`.
-    single_obs_var: bool
+    single_obs_var: bool, optional
         Determines whether there are multiple observation variances or not.
         Only used when not given intial parameters.
+    include_ppy: bool, optional
+        If `True`, then include an unobserved observation Stochastic that can
+        be used to produce posterior predicitve samples.  The Stochastic
+        will have the name `y_pp`.
 
     Returns
     =======
@@ -654,7 +659,7 @@ def make_normal_hmm(y_data, X_data, initial_params=None, single_obs_var=False):
             V_invs_0 = np.tile(S_obs, V_invs_shape)
         else:
             V_invs_n_0 = np.ones(1)
-            V_invs_S_0 = np.tile(1e-3, V_invs_shape)
+            V_invs_S_0 = np.tile(1, V_invs_shape)
             V_invs_0 = np.ones(V_invs_shape)
 
     trans_mat = TransProbMatrix("trans_mat", alpha_trans,
@@ -760,6 +765,9 @@ def make_normal_hmm(y_data, X_data, initial_params=None, single_obs_var=False):
     #                            0., np.inf,
     #                            value=y_data,
     #                            observed=y_observed)
+
+    if y_observed and include_ppy:
+        y_pp_rv = pymc.Normal('y_pp', mu, V_inv, trace=True)
 
     return pymc.Model(locals())
 

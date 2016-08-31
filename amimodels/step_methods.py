@@ -148,12 +148,12 @@ class PriorObsSampler(pymc.StepMethod):
     parts) from its prior.
     """
 
-    def __init__(self, variables, verbose=-1):
-        super(PriorObsSampler, self).__init__(variables, verbose, tally=True)
+    def __init__(self, variables, verbose=-1, tally=True):
+        super(PriorObsSampler, self).__init__(variables, verbose, tally=tally)
 
-        if not all([s_.mask is not None for s_ in self.stochastics]):
-            raise ValueError(("At least one stochastic is not observed and/or"
-                              " without a mask"))
+        #if not all([s_.mask is not None for s_ in self.stochastics]):
+        #    raise ValueError(("At least one stochastic is not observed and/or"
+        #                      " without a mask"))
 
         def get_stoch_value(self):
             return self._value
@@ -516,7 +516,8 @@ class NormalNormalStep(ExtStepMethod):
             raise NotImplementedError(("Step method only valid for a single "
                                        "stochastics:{}".format(e)))
         try:
-            (self.y_beta,) = self.children
+            (self.y_beta,) = filter(lambda x_: getattr(x_, 'observed', False),
+                                    self.children)
         except ValueError as e:
             raise NotImplementedError(("Step method only valid for a single "
                                        "observed node."
@@ -695,7 +696,8 @@ class GammaNormalStep(ExtStepMethod):
             raise NotImplementedError(("Step method only valid for a single "
                                        "stochastics:{}".format(e)))
         try:
-            (self.obs_rv,) = self.children
+            (self.obs_rv,) = filter(lambda x_: getattr(x_, 'observed', False),
+                                    self.children)
         except ValueError as e:
             raise NotImplementedError(("Step method only valid for a single "
                                        "observed node."
