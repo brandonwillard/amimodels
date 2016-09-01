@@ -327,20 +327,25 @@ class HMMStatesStep(ExtStepMethod):
         """
         super(HMMStatesStep, self).__init__(variables, *args, **kwargs)
 
-        self.state_seq = variables if isinstance(variables, (list, tuple))\
-            else (variables,)
+        self.state_seq = self.stochastics
 
         #N_obs = stoch.parents['N_obs']
         #N_obs = getattr(N_obs, 'value', N_obs)
         self.N_obs = sum([np.alen(v_.value) for v_ in self.state_seq])
 
+        # FIXME TODO: Use the posterior/integrated logp!
         from collections import defaultdict
         self.stoch_to_obsfn = defaultdict(list)
         for stoch in self.state_seq:
             obs_children = self.children.intersection(stoch.extended_children)
+            # This is fairly hackish, but we order multiple observed
+            # stochastics by their names:
             for obs_var in sorted(obs_children, key=lambda x: x.__name__):
                 self.stoch_to_obsfn[stoch].append((obs_var,
-                                                   create_lazy_logp_t(obs_var)))
+                                                   # TODO: This is where the
+                                                   # posterior stuff goes...
+                                                   create_lazy_logp_t(obs_var))
+                                                  )
 
         # Any connecting terms between obs_vars and our self.stochastic
         # (mus, for instance) should be immediately affected by changes to

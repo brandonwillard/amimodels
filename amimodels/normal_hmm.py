@@ -635,7 +635,7 @@ def make_normal_hmm(y_data, X_data, initial_params=None, single_obs_var=False,
     trans_mat_0 = getattr(initial_params, 'trans_mat', None)
     states_p_0 = getattr(initial_params, 'p0', None)
     states_0 = getattr(initial_params, 'states', None)
-    betas_0 = getattr(initial_params, 'betas', [None]*N_states)
+    betas_0 = getattr(initial_params, 'betas', None)
     V_invs_n_0 = getattr(initial_params, 'Vs_n', None)
     V_invs_S_0 = getattr(initial_params, 'Vs_S', None)
     V_invs_0 = getattr(initial_params, 'Vs', None)
@@ -646,6 +646,9 @@ def make_normal_hmm(y_data, X_data, initial_params=None, single_obs_var=False,
     #
     if alpha_trans is None:
         alpha_trans = np.ones((N_states, N_states))
+
+    if trans_mat_0 is None:
+        trans_mat_0 = np.tile(1./N_states, (N_states, N_states-1))
 
     if betas_0 is None:
         betas_0 = [np.zeros(X_.shape[1]) for X_ in X_data]
@@ -695,8 +698,7 @@ def make_normal_hmm(y_data, X_data, initial_params=None, single_obs_var=False,
         def k_idx_func(s_=states, k_=k):
             return np.flatnonzero(k_ == s_)
 
-        # XXX: Can't trace these Deterministics, since they
-        # change shape.
+        # XXX: Can't trace these Deterministics, since they change shape.
         k_idx = pymc.Lambda("state-idx-{}".format(k),
                             k_idx_func, trace=False)
 

@@ -1,6 +1,7 @@
 from __future__ import division
 
 import sys
+from functools import partial
 
 import pandas as pd
 import numpy as np
@@ -16,7 +17,8 @@ from amimodels.normal_hmm import (NormalHMMProcess, make_normal_hmm,
                                   bic_norm_hmm_init_params,
                                   NormalHMMInitialParams,
                                   calc_alpha_prior, trace_sampler,
-                                  get_stochs_excluding)
+                                  get_stochs_excluding,
+                                  generate_temperatures)
 from amimodels.step_methods import (
     TransProbMatStep,
     HMMStatesStep,
@@ -180,8 +182,7 @@ def test_missing_init(init_func):
     assert not any(init_params.states.isnull())
 
 
-def test_degenerate(init_func,
-                    mcmc_iters=200):
+def test_degenerate(mcmc_iters=200):
     """Test that the initial value are reasonable for degenerate
     observations.
     """
@@ -191,32 +192,27 @@ def test_degenerate(init_func,
     X_matrices = [pd.DataFrame(np.ones((N_obs, 1))),
                   pd.DataFrame(np.ones((N_obs, 2)))]
 
-    #init_params = init_func(y_obs, X_matrices)
-
-    #import collections
-    #for k, v in init_params.__dict__.items():
-    #    if v is None:
-    #        continue
-    #    elif isinstance(v, collections.Iterable):
-    #        assert all([np.all(np.isfinite(v_)) for v_ in v])
-    #    else:
-    #        assert np.all(np.isfinite(v))
-
-    norm_hmm = make_normal_hmm(y_obs, X_matrices)#, init_params)
+    norm_hmm = make_normal_hmm(y_obs, X_matrices)
 
     mcmc_step = pymc.MCMC(norm_hmm.variables)
 
-    from itertools import chain
-    for e_ in chain(norm_hmm.etas, norm_hmm.lambdas):
-        mcmc_step.use_step_method(pymc.StepMethods.Metropolis,
-                                  e_, proposal_distribution='Prior')
+    #from itertools import chain
+    #for e_ in chain(norm_hmm.etas, norm_hmm.lambdas):
+    #    mcmc_step.use_step_method(pymc.StepMethods.Metropolis,
+    #                              e_, proposal_distribution='Prior')
 
     mcmc_step.sample(mcmc_iters)
 
-    assert_hpd(norm_hmm.states, np.zeros(N_obs))
     assert_hpd(norm_hmm.mu, np.ones(N_obs))
-    assert_hpd(norm_hmm.betas[0], np.ones(norm_hmm.betas[0].shape))
-    assert_hpd(norm_hmm.betas[1], np.zeros(norm_hmm.betas[1].shape))
+    # We don't necessarily know the order of the states (i.e.
+    # does state 1 have smallest mean, etc.), so it's hard
+    # to make the comparison without imposing an order, and
+    # that's not always [distinctly] possible (e.g. more than one
+    # non-ordered parameter in a state).
+
+    #assert_hpd(norm_hmm.states, np.zeros(N_obs))
+    #assert_hpd(norm_hmm.betas[0], np.ones(norm_hmm.betas[0].shape))
+    #assert_hpd(norm_hmm.betas[1], np.zeros(norm_hmm.betas[1].shape))
 
 
 def test_no_est(model_true,
@@ -292,6 +288,56 @@ def test_missing_inference(model_true,
 
     # TODO: Check all estimated quantities?
     assert_hpd(norm_hmm.trans_mat, model_true.trans_mat)
+
+
+def test_sinusoid():
+    """ Generate a two-state normal emissions HMM with
+    the first state having a low constant value and the second
+    a regression involving a sinusoidal exogenous variable.
+    We fit the same model but include an extraneous variable to the
+    regression.
+    """
+    temperature_generator = partial(generate_temperatures,
+                                    period=23.,
+                                    offset=np.pi,
+                                    base_temp=50.,
+                                    flux_amt=30.)
+    model_true = NormalHMMProcess(np.asarray([[0.8], [0.08]]),
+                                  300,
+                                  np.asarray([1., 0.]),
+                                  np.asarray([[0.2], [0.2, 0.01, 0.]]),
+                                  np.asarray([0.1 / 10.**3, 0.5 / 10.**2]),
+                                  exogenous_sim_func=temperature_generator,
+                                  formulas=["1 ~ 1",
+                                            "1 ~ 1 + temp + I(temp**2)"],
+                                  seed=249298)
+
+    states_true, y, X_matrices = model_true.simulate()
+
+    means_true = np.fromiter((np.dot(X_matrices[s].iloc[t],
+                                     model_true.betas[s])
+                              for t, s in enumerate(states_true)),
+                             dtype=np.float)
+
+    norm_hmm = make_normal_hmm(y, X_matrices, None,
+                               single_obs_var=True)
+
+    mcmc_step = pymc.MCMC(norm_hmm.variables)
+    mcmc_step.assign_step_methods()
+    #mcmc_step.step_method_dict
+
+    mcmc_iters = 200
+    mcmc_step.sample(mcmc_iters, burn=mcmc_iters//2)
+
+    assert_hpd(norm_hmm.trans_mat, model_true.trans_mat)
+    assert_hpd(norm_hmm.states, states_true)
+
+    assert_hpd(norm_hmm.mu, means_true, rtol=0.15)
+
+    assert_hpd(norm_hmm.betas[0], model_true.betas[0])
+
+    assert_hpd(norm_hmm.betas[1], model_true.betas[1],
+               rtol=np.array([0.25, 0.1, 0.1]))
 
 
 @pytest.mark.skip(reason="In progress...")

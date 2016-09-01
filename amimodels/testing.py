@@ -5,7 +5,8 @@ from amimodels.normal_hmm import HMMStateSeq, TransProbMatrix
 from amimodels.deterministics import HMMLinearCombination
 
 
-def assert_hpd(stochastic, true_value, alpha=0.05):
+def assert_hpd(stochastic, true_value, alpha=0.05,
+               subset=slice(0, None), rtol=0):
     r""" Assert that the given stochastic's :math:`(1-\alpha)` HPD
     interval covers the true value.
 
@@ -15,6 +16,13 @@ def assert_hpd(stochastic, true_value, alpha=0.05):
         The stochastic we want to test.  Must have trace values.
     true_value: ndarray
         The "true" values to check against.
+    alpha: float, optional
+        The alpha confidence level.
+    subset: slice, optional
+        Slice for the subset of parameters to check.
+    rtol: array of float, optional
+        Relative tolerences for matching the edges of the intervals.
+    edge
 
     Returns
     =======
@@ -22,10 +30,30 @@ def assert_hpd(stochastic, true_value, alpha=0.05):
     """
     interval_name = '{}% HPD interval'.format(int(100. * (1. - alpha)))
     stoc_stats = stochastic.stats(alpha=alpha)[interval_name]
-    assert all(np.ravel(stoc_stats[0]) <= np.ravel(true_value)),\
-        "{} lower 95% HPD interval".format(stochastic.__name__)
-    assert all(np.ravel(stoc_stats[1]) >= np.ravel(true_value)),\
-        "{} upper 95% HPD interval".format(stochastic.__name__)
+
+    true_value = np.ravel(true_value)[subset]
+
+    lower_bounds = np.ravel(stoc_stats[0])[subset]
+    upper_bounds = np.ravel(stoc_stats[1])[subset]
+
+    if np.alen(rtol) == 1:
+        rtol = np.tile(rtol, np.alen(true_value))
+
+    lower_diff = lower_bounds - true_value
+    lower_ok = lower_diff <= 0
+    lower_close = np.allclose(lower_bounds[~lower_ok], true_value[~lower_ok],
+                              atol=1e-5, rtol=rtol[~lower_ok])
+    lower_check = lower_close
+
+    assert lower_check, "{} lower 95% HPD interval".format(stochastic.__name__)
+
+    upper_diff = true_value - upper_bounds
+    upper_ok = upper_diff <= 0
+    upper_close = np.allclose(upper_bounds[~upper_ok], true_value[~upper_ok],
+                              atol=1e-5, rtol=rtol[~upper_ok])
+    upper_check = upper_close
+
+    assert upper_check, "{} upper 95% HPD interval".format(stochastic.__name__)
 
 
 def simple_norm_reg_model(N_obs=100, X_matrices=None, betas=None,
