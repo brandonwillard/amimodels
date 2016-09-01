@@ -251,11 +251,6 @@ def test_no_est(model_true,
 
     mcmc_step = pymc.MCMC(norm_hmm.variables)
 
-    mcmc_step.use_step_method(HMMStatesStep, norm_hmm.states)
-    mcmc_step.use_step_method(TransProbMatStep, norm_hmm.trans_mat)
-    for b_ in norm_hmm.betas:
-        mcmc_step.use_step_method(NormalNormalStep, b_)
-
     mcmc_step.sample(mcmc_iters)
 
     # TODO: Check all estimated quantities?

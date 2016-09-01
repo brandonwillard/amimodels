@@ -22,9 +22,9 @@ def assert_hpd(stochastic, true_value, alpha=0.05):
     """
     interval_name = '{}% HPD interval'.format(int(100. * (1. - alpha)))
     stoc_stats = stochastic.stats(alpha=alpha)[interval_name]
-    assert all(stoc_stats[0].flatten() <= true_value.flatten()),\
+    assert all(np.ravel(stoc_stats[0]) <= np.ravel(true_value)),\
         "{} lower 95% HPD interval".format(stochastic.__name__)
-    assert all(stoc_stats[1].flatten() >= true_value.flatten()),\
+    assert all(np.ravel(stoc_stats[1]) >= np.ravel(true_value)),\
         "{} upper 95% HPD interval".format(stochastic.__name__)
 
 

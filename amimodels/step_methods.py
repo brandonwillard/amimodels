@@ -109,7 +109,7 @@ def create_lazy_logp_t(stoch):
     return y_rv_logp_t
 
 
-def find_all_paths(start, end, path=[]):
+def find_all_paths(start, end, path=[], ignored=[]):
     """ Finds graph paths.
 
     Taken from `here <https://www.python.org/doc/essays/graphs/>`_.
@@ -135,8 +135,11 @@ def find_all_paths(start, end, path=[]):
         return []
     paths = []
     for node in start.children:
+        if node in ignored:
+            continue
         if node not in path:
-            newpaths = find_all_paths(node, end, path)
+            newpaths = find_all_paths(node, end,
+                                      path, ignored)
             for newpath in newpaths:
                 paths.append(newpath)
     return paths
@@ -168,12 +171,35 @@ class PriorObsSampler(pymc.StepMethod):
 
 class ExtStepMethod(pymc.StepMethod):
     r""" A pymc.StepMethod subclass that performs basic input consistency checks.
+    Members
+    =======
+    target_classes: collection of class objects
+        The stochastics class types that this step method
+        can produce samples.
+    child_classes: collection of class objects
+        The stochastic class types that are dependent on the
+        `target_classes` and can be used by this step method to
+        produce informed samples.
+    linear_OK: bool
+        Not really used.
+    target_exclusive_match: bool
+        When determining the competence of a target stochastic,
+        must we strictly match the `target_classes` in order
+        to give non-zero competence?
+    child_exclusive_match: bool
+        When determining the competence of a target stochastic,
+        must we strictly match the `child_classes` in order
+        to give non-zero competence?
+    children_conditioned: list of pymc.Node
+        Nodes that this step method considers constants/conditionally.
     """
 
     child_classes = None
     target_classes = None
     linear_OK = False
-    strict_competence_match = False
+    target_exclusive_match = False
+    child_exclusive_match = False
+    children_conditioned = []
 
     @staticmethod
     def valid_stochastic(stochastic, children):
@@ -192,27 +218,42 @@ class ExtStepMethod(pymc.StepMethod):
         if not np.iterable(s) or isinstance(s, pymc.Node):
             s = [s]
 
-        if cls.strict_competence_match and\
+        if cls.target_exclusive_match and\
                 all(isinstance(s_, cls.target_classes) for s_ in s):
 
             # No children?
             if len(cls.child_classes) == 0:
                 return 0
 
+            # We weren't given the children (that's usually done
+            # in the class constructor), so we have to find them
+            # to perform this check.
             from itertools import chain, ifilter
             s_children = chain(*(s_.extended_children | s_.children
                                  for s_ in s))
+
+            # XXX: We're only checking the children that are observed;
+            # that might not always be what we want.
             s_obs_children = ifilter(lambda x: getattr(x, 'observed', False),
                                      s_children)
             children_check = [isinstance(oc, cls.child_classes)
                               for oc in s_obs_children]
 
-            # TODO: Might want to relax these observed children constraints.
-            if not len(children_check) > 0 and not all(children_check):
+            # TODO: Might want to relax these observed children
+            # constraints.
+            if len(children_check) > 0:
+                if cls.child_exclusive_match and\
+                        all(children_check):
+                    return 3
+                elif any(children_check):
+                    return 2
+
+                return 0
+            else:
                 return 0
 
-            if not cls.valid_stochastic(s, s_obs_children):
-                return 0
+            #if not cls.valid_stochastic(s, s_obs_children):
+            #    return 0
 
             return 3
         else:
@@ -222,17 +263,13 @@ class ExtStepMethod(pymc.StepMethod):
 
         super(ExtStepMethod, self).__init__(variables, *args, **kwargs)
 
-        if self.target_classes is not None and\
-                not all(isinstance(s_, self.target_classes) for s_ in
-                        self.stochastics):
-            raise NotImplementedError(("Step method only valid for {} target"
-                                       " classes".format(self.target_classes)))
-
-        if self.child_classes is not None and\
-                not all([isinstance(c_, self.child_classes) for c_ in
-                         self.children]):
-            raise NotImplementedError(("Step method only valid for {} child"
-                                       " classes".format(self.child_classes)))
+        # If we didn't exclusively match on child classes,
+        # then we at least need to get rid of the ones we won't use.
+        if self.child_classes is not None:
+            children_active = set([c_ for c_ in self.children
+                                   if isinstance(c_, self.child_classes)])
+            self.children_conditioned = self.children - children_active
+            self.children = children_active
 
 
 class HMMStatesStep(ExtStepMethod):
@@ -267,7 +304,7 @@ class HMMStatesStep(ExtStepMethod):
     child_classes = (pymc.Node,)
     target_classes = (HMMStateSeq,)
     linear_OK = False
-    strict_competence_match = True
+    target_exclusive_match = True
 
     def __init__(self, variables, *args, **kwargs):
         """
@@ -279,7 +316,8 @@ class HMMStatesStep(ExtStepMethod):
         """
         super(HMMStatesStep, self).__init__(variables, *args, **kwargs)
 
-        self.state_seq = variables if isinstance(variables, (list, tuple)) else (variables,)
+        self.state_seq = variables if isinstance(variables, (list, tuple))\
+            else (variables,)
 
         #N_obs = stoch.parents['N_obs']
         #N_obs = getattr(N_obs, 'value', N_obs)
@@ -444,11 +482,10 @@ class TransProbMatStep(ExtStepMethod):
     The :math:`N_{j,k}(S)` are counts of observed transitions :math:`j \to k`.
 
     '''
-    child_classes = HMMStateSeq
-    #parent_label = 'alpha'
-    target_classes = TransProbMatrix
+    child_classes = (HMMStateSeq,)
+    target_classes = (TransProbMatrix,)
     linear_OK = False
-    strict_competence_match = True
+    target_exclusive_match = True
 
     def __init__(self, variables, *args, **kwargs):
         super(TransProbMatStep, self).__init__(variables, *args, **kwargs)
@@ -504,7 +541,7 @@ class NormalNormalStep(ExtStepMethod):
     child_classes = (pymc.Normal, pymc.TruncatedNormal)
     target_classes = (pymc.Normal, pymc.HalfNormal, pymc.TruncatedNormal)
     linear_OK = True
-    strict_competence_match = True
+    target_exclusive_match = True
 
     def __init__(self, variables, *args, **kwargs):
 
@@ -523,7 +560,8 @@ class NormalNormalStep(ExtStepMethod):
                                        "observed node."
                                        ":{}".format(e)))
         try:
-            (beta_to_y_path,) = find_all_paths(self.stochastic, self.y_beta)
+            (beta_to_y_path,) = find_all_paths(self.stochastic, self.y_beta,
+                                               ignored=self.children_conditioned)
         except ValueError as e:
             raise NotImplementedError(("Step method only valid for a single "
                                        "linear relation to its observed child"
@@ -678,7 +716,7 @@ class GammaNormalStep(ExtStepMethod):
     # TODO: add pymc.InverseGamma target
     target_classes = (pymc.Gamma, )
     linear_OK = False
-    strict_competence_match = True
+    target_exclusive_match = True
 
     def __init__(self, variables, state_obs_mask=None, *args, **kwargs):
         r"""
@@ -703,7 +741,8 @@ class GammaNormalStep(ExtStepMethod):
                                        "observed node."
                                        ":{}".format(e)))
         try:
-            (gamma_to_obs_path,) = find_all_paths(self.stochastic, self.obs_rv)
+            (gamma_to_obs_path,) = find_all_paths(self.stochastic, self.obs_rv,
+                                                  ignored=self.children_conditioned)
         except ValueError as e:
             raise NotImplementedError(("Step method only valid for a single "
                                        "linear relation to its observed child"

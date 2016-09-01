@@ -654,7 +654,7 @@ def make_normal_hmm(y_data, X_data, initial_params=None, single_obs_var=False,
         V_invs_shape = (1 if single_obs_var else N_states,)
         if y_data is not None:
             V_invs_n_0 = np.tile(1, V_invs_shape)
-            S_obs = float(np.var(y_data))
+            S_obs = max(1, float(np.var(y_data)))
             V_invs_S_0 = np.tile(S_obs, V_invs_shape)
             V_invs_0 = np.tile(S_obs, V_invs_shape)
         else:
@@ -662,11 +662,22 @@ def make_normal_hmm(y_data, X_data, initial_params=None, single_obs_var=False,
             V_invs_S_0 = np.tile(1, V_invs_shape)
             V_invs_0 = np.ones(V_invs_shape)
 
+    # Transition probability stochastic:
     trans_mat = TransProbMatrix("trans_mat", alpha_trans,
                                 value=trans_mat_0)
 
+    # State sequence stochastics:
     states = HMMStateSeq("states", trans_mat, N_obs,
                          p0=states_p_0, value=states_0)
+
+    # Observation precision distributions:
+    V_inv_list = [pymc.Gamma('V-{}'.format(k),
+                             n_0/2., n_0 * S_0/2.,
+                             value=V_inv_0)
+                  for k, (V_inv_0, n_0, S_0) in
+                  enumerate(zip(V_invs_0, V_invs_n_0, V_invs_S_0))]
+
+    V_invs = pymc.ArrayContainer(np.array(V_inv_list, dtype=np.object))
 
     beta_list = ()
     eta_list = ()
@@ -677,6 +688,8 @@ def make_normal_hmm(y_data, X_data, initial_params=None, single_obs_var=False,
     # Very useful for breaking quantities mixtures into separate,
     # easy to handle problems.
     state_obs_idx = ()
+
+    # Now, initialize all the intra-state terms:
     for k in range(N_states):
 
         def k_idx_func(s_=states, k_=k):
@@ -692,13 +705,30 @@ def make_normal_hmm(y_data, X_data, initial_params=None, single_obs_var=False,
         size_k = X_data[k].shape[1]
         size_k = size_k if size_k > 1 else None
 
+        # Local shrinkage terms:
         lambda_k = pymc.HalfCauchy('lambda-{}'.format(k),
                                    0., 1., size=size_k)
 
-        eta_k = pymc.HalfCauchy('eta-{}'.format(k),
-                                0., 1.)
+        # We're initializing the scale of the global
+        # shrinkage parameter's distribution with a decent,
+        # asymptotically motivated value:
+        if size_k is not None:
+            k_V = k if len(V_invs) == N_states else 0
+            eta_k_scale = pymc.Lambda('eta-{}-scale'.format(k),
+                                      lambda V_i=V_invs[k_V], s_=size_k:
+                                      np.sqrt(1/V_i) / np.sqrt(np.log(s_)),
+                                      trace=False)
+            # Global shrinkage term:
+            eta_k = pymc.HalfCauchy('eta-{}'.format(k), 0., eta_k_scale)
+            eta_list += (eta_k,)
 
-        beta_tau_k = (lambda_k * eta_k)**(-2)
+            beta_tau_k = (lambda_k * eta_k)**(-2)
+        else:
+            beta_tau_k = (lambda_k)**(-2)
+
+        # Consider using just pymc.Cauchy; that way, there's
+        # no support restriction that could make things difficult
+        # for naive samplers, etc.
 
         beta_k = pymc.Normal('beta-{}'.format(k),
                              0., beta_tau_k,
@@ -712,31 +742,14 @@ def make_normal_hmm(y_data, X_data, initial_params=None, single_obs_var=False,
         #                              size=size_k)
 
         beta_list += (beta_k,)
-        eta_list += (eta_k,)
         lambda_list += (lambda_k,)
         beta_tau_list += (beta_tau_k,)
-
-        del beta_k, size_k, beta_tau_k, lambda_k, eta_k, k_idx
-
-    del k
 
     # These containers are handy, but not necessary.
     betas = pymc.TupleContainer(beta_list)
     etas = pymc.TupleContainer(eta_list)
     lambdas = pymc.TupleContainer(lambda_list)
     beta_taus = pymc.TupleContainer(beta_tau_list)
-
-    del beta_list, eta_list, lambda_list, beta_tau_list
-
-    V_inv_list = [pymc.Gamma('V-{}'.format(k),
-                             n_0/2., n_0 * S_0/2.,
-                             value=V_inv_0)
-                  for k, (V_inv_0, n_0, S_0) in
-                  enumerate(zip(V_invs_0, V_invs_n_0, V_invs_S_0))]
-
-    V_invs = pymc.ArrayContainer(np.array(V_inv_list, dtype=np.object))
-
-    del V_inv_list
 
     mu = HMMLinearCombination('mu', X_data, betas, states)
 
