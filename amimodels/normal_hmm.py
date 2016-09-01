@@ -647,20 +647,20 @@ def make_normal_hmm(y_data, X_data, initial_params=None, single_obs_var=False,
     if alpha_trans is None:
         alpha_trans = np.ones((N_states, N_states))
 
-    #if betas_0 is None:
-    #    betas_0 = [np.ones(X_.shape[1]) for X_ in X_data]
+    if betas_0 is None:
+        betas_0 = [np.zeros(X_.shape[1]) for X_ in X_data]
 
     if V_invs_n_0 is None or V_invs_S_0 is None:
         V_invs_shape = (1 if single_obs_var else N_states,)
         if y_data is not None:
             V_invs_n_0 = np.tile(1, V_invs_shape)
-            S_obs = max(1, float(np.var(y_data)))
+            S_obs = np.clip(float(np.var(y_data)), 1e-4, np.inf)
             V_invs_S_0 = np.tile(S_obs, V_invs_shape)
             V_invs_0 = np.tile(S_obs, V_invs_shape)
         else:
             V_invs_n_0 = np.ones(1)
-            V_invs_S_0 = np.tile(1, V_invs_shape)
-            V_invs_0 = np.ones(V_invs_shape)
+            V_invs_S_0 = np.tile(1e-3, V_invs_shape)
+            V_invs_0 = np.tile(1e-3, V_invs_shape)
 
     # Transition probability stochastic:
     trans_mat = TransProbMatrix("trans_mat", alpha_trans,
@@ -706,7 +706,7 @@ def make_normal_hmm(y_data, X_data, initial_params=None, single_obs_var=False,
         size_k = size_k if size_k > 1 else None
 
         # Local shrinkage terms:
-        lambda_k = pymc.HalfCauchy('lambda-{}'.format(k),
+        lambda_k = pymc.HalfCauchy('lambdas-{}'.format(k),
                                    0., 1., size=size_k)
 
         # We're initializing the scale of the global

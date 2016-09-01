@@ -4,6 +4,8 @@ This module provides PyMC MCMC sampler step methods.
 .. moduleauthor:: Brandon T. Willard
 """
 import types
+from warnings import warn
+
 import numpy as np
 import pymc
 from pymc.LazyFunction import LazyFunction
@@ -209,55 +211,64 @@ class ExtStepMethod(pymc.StepMethod):
         return True
 
     @classmethod
-    def competence(cls, s):
+    def competence(cls, targets):
         """ This class method checks that target and child classes
         match for the given step function.
         We have to do some work to get the (potential) child classes, though.
         """
 
-        if not np.iterable(s) or isinstance(s, pymc.Node):
-            s = [s]
+        if not np.iterable(targets) or isinstance(targets, pymc.Node):
+            targets = [targets]
 
-        if cls.target_exclusive_match and\
-                all(isinstance(s_, cls.target_classes) for s_ in s):
+        res = 4
 
-            # No children?
-            if len(cls.child_classes) == 0:
+        #valid_targets = (t_ for t_ in targets
+        #                 if isinstance(t_, cls.target_classes))
+        valid_targets = [isinstance(t_, cls.target_classes) for t_ in targets]
+
+        if cls.target_exclusive_match and not any(valid_targets):
+            return 0
+
+        # No children?
+        if len(cls.child_classes) == 0:
+            warn("{} specifies no child classes".format(cls.__name__))
+            return 0
+
+        # We weren't given the children (that's usually done
+        # in the class constructor), so we have to find them
+        # to perform this check.
+        from itertools import chain
+        children = chain(*(t_.extended_children | t_.children
+                           for t_ in targets))
+
+        #valid_children = (c_ for c_ in children
+        #                  if isinstance(c_, cls.child_classes))
+        valid_children = [isinstance(c_, cls.child_classes) for c_ in children]
+
+        # TODO: Might want to relax these observed children
+        # constraints.
+        if len(valid_children) == 0:
+            return 0
+
+        if not all(valid_children):
+            if cls.child_exclusive_match:
                 return 0
 
-            # We weren't given the children (that's usually done
-            # in the class constructor), so we have to find them
-            # to perform this check.
-            from itertools import chain, ifilter
-            s_children = chain(*(s_.extended_children | s_.children
-                                 for s_ in s))
-
-            # XXX: We're only checking the children that are observed;
-            # that might not always be what we want.
-            s_obs_children = ifilter(lambda x: getattr(x, 'observed', False),
-                                     s_children)
-            children_check = [isinstance(oc, cls.child_classes)
-                              for oc in s_obs_children]
-
-            # TODO: Might want to relax these observed children
-            # constraints.
-            if len(children_check) > 0:
-                if cls.child_exclusive_match and\
-                        all(children_check):
-                    return 3
-                elif any(children_check):
-                    return 2
-
-                return 0
+            # This is a tough one: should we really take a point
+            # off for not matching *all* child types?
+            # In some cases the non-matching could be unobserved,
+            # while the matching are observed.  That could make perfect
+            # sense, and shouldn't lower the competence.
+            if any(valid_children):
+                #obs_valid_children = (getattr(c_, 'observed', False)
+                #                      for c_ in valid_children)
+                #if not all(obs_valid_children):
+                #    res -= 1
+                pass
             else:
                 return 0
 
-            #if not cls.valid_stochastic(s, s_obs_children):
-            #    return 0
-
-            return 3
-        else:
-            return 0
+        return max(res, 0)
 
     def __init__(self, variables, *args, **kwargs):
 
@@ -636,6 +647,18 @@ class NormalNormalStep(ExtStepMethod):
             self.post_b = beta_b if self.post_b is None else\
                 np.minimum(self.post_b, beta_b)
 
+        # Now, let's see if we can hack up a means of
+        # finding the observation variable's precision
+        # stochastic (if any).
+        if isinstance(self.tau_y, pymc.Node):
+            if isinstance(self.tau_y, pymc.Gamma):
+                self.V_inv = self.tau_y
+            else:
+                # XXX: Very narrow approach.
+                if set(self.tau_y.parents.keys()) == set(['index', 'self']):
+                    k_ = self.tau_y.parents['index'].parents['k_']
+                    self.V_inv = self.tau_y.parents['self'].parents['V_invs_'][k_]
+
     def step(self):
         # We're going to do this in a way that allows easy extension
         # to multivariate beta (and even y with non-diagonal covariances,
@@ -670,6 +693,8 @@ class NormalNormalStep(ExtStepMethod):
         # TODO: These could be symbolic/Deterministic, no?
         parents_post = {'mu': a_post, 'tau': tau_post}
         self.stochastic.parents_post = parents_post
+
+        # TODO: If self.V_inv, sample normal-gamma dist
 
         if self.post_a is not None and self.post_b is not None:
             parents_post['a'] = self.post_a
@@ -814,7 +839,7 @@ class GammaNormalStep(ExtStepMethod):
 
         mu_y = getattr(self.gamma_mu, 'value', self.gamma_mu)
 
-        r2 = np.square(y - mu_y).sum()
+        r2 = np.sum(np.square(y - mu_y))
 
         alpha_post = self.alpha_prior + np.alen(y)/2.
         beta_post = self.beta_prior + r2/2.
