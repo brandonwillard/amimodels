@@ -111,7 +111,7 @@ def create_lazy_logp_t(stoch):
     return y_rv_logp_t
 
 
-def find_all_paths(start, end, path=[], ignored=[]):
+def find_all_paths(start, end, path=[], ignored=[], dir='children'):
     """ Finds graph paths.
 
     Taken from `here <https://www.python.org/doc/essays/graphs/>`_.
@@ -124,6 +124,8 @@ def find_all_paths(start, end, path=[], ignored=[]):
         Terminating node.
     path: list
         Current path.
+    dir: "children" or "parents"
+        Direction of travel through the graph.
 
     Returns
     =======
@@ -133,10 +135,10 @@ def find_all_paths(start, end, path=[], ignored=[]):
     path = path + [start]
     if start == end:
         return [path]
-    if len(start.children) == 0:
-        return []
+    #if len(getattr(start, dir)) == 0:
+    #    return []
     paths = []
-    for node in start.children:
+    for node in getattr(start, dir):
         if node in ignored:
             continue
         if node not in path:
@@ -333,7 +335,6 @@ class HMMStatesStep(ExtStepMethod):
         #N_obs = getattr(N_obs, 'value', N_obs)
         self.N_obs = sum([np.alen(v_.value) for v_ in self.state_seq])
 
-        # FIXME TODO: Use the posterior/integrated logp!
         from collections import defaultdict
         self.stoch_to_obsfn = defaultdict(list)
         for stoch in self.state_seq:
@@ -342,8 +343,6 @@ class HMMStatesStep(ExtStepMethod):
             # stochastics by their names:
             for obs_var in sorted(obs_children, key=lambda x: x.__name__):
                 self.stoch_to_obsfn[stoch].append((obs_var,
-                                                   # TODO: This is where the
-                                                   # posterior stuff goes...
                                                    create_lazy_logp_t(obs_var))
                                                   )
 
@@ -771,6 +770,7 @@ class GammaNormalStep(ExtStepMethod):
                                        "observed node."
                                        ":{}".format(e)))
         try:
+            find_all_paths(self.stochastic, self.children, ignored=self.children_conditioned)
             (gamma_to_obs_path,) = find_all_paths(self.stochastic, self.obs_rv,
                                                   ignored=self.children_conditioned)
         except ValueError as e:

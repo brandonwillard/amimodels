@@ -708,8 +708,8 @@ def make_normal_hmm(y_data, X_data, initial_params=None, single_obs_var=False,
         size_k = size_k if size_k > 1 else None
 
         # Local shrinkage terms:
-        lambda_k = pymc.HalfCauchy('lambdas-{}'.format(k),
-                                   0., 1., size=size_k)
+        lambda_k = pymc.Cauchy('lambdas-{}'.format(k),
+                               0., 1., size=size_k)
 
         # We're initializing the scale of the global
         # shrinkage parameter's distribution with a decent,
@@ -721,7 +721,7 @@ def make_normal_hmm(y_data, X_data, initial_params=None, single_obs_var=False,
                                       np.sqrt(1/V_i) / np.sqrt(np.log(s_)),
                                       trace=False)
             # Global shrinkage term:
-            eta_k = pymc.HalfCauchy('eta-{}'.format(k), 0., eta_k_scale)
+            eta_k = pymc.Cauchy('eta-{}'.format(k), 0., eta_k_scale)
             eta_list += (eta_k,)
 
             beta_tau_k = (lambda_k * eta_k)**(-2)

@@ -340,6 +340,7 @@ def test_sinusoid():
                rtol=np.array([0.25, 0.1, 0.1]))
 
 
+
 @pytest.mark.skip(reason="In progress...")
 def test_prediction(
                     mcmc_iters=200
@@ -423,4 +424,36 @@ def test_prediction(
     # TODO: Not easy to compare these unless we have very strong
     # predictors.  Even then, the states will vary freely.
     #sqrd_err = np.abs(mu_pred_df.values - y_oos_df.values).mean()
+
+
+@pytest.mark.skip(reason="In progress...")
+def test_example_1():
+    """ TODO
+    """
+    import pickle
+    import patsy
+
+    model_data, formulas = pickle.load(open('tests/data/test_example_1.pkl', 'rb'))
+
+    X_matrices = []
+    for formula in formulas:
+        y, X = patsy.dmatrices(formula, model_data,
+                               return_type='dataframe')
+        X_matrices += [X]
+
+    init_params = None  # gmm_norm_hmm_init_params(y, X_matrices)
+
+    norm_hmm = make_normal_hmm(y, X_matrices, init_params,
+                                include_ppy=True)
+
+    # Some very basic, generic initializations for the state parameters.
+    norm_hmm.betas[0].value = 0
+    b1_0 = norm_hmm.betas[1].value.copy()
+    b1_0[0] = float(y.mean())
+    norm_hmm.betas[1].value = b1_0
+
+    mcmc_step = pymc.MCMC(norm_hmm.variables)
+    mcmc_step.assign_step_methods()
+
+    # TODO: Check results.
 
