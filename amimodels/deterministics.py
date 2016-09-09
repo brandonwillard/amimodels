@@ -4,9 +4,70 @@ for hidden Markov models.
 
 .. moduleauthor:: Brandon T. Willard
 """
+import collections
+
 import numpy as np
 import pymc
-import collections
+
+from pymc.NumpyDeterministics import deterministic_from_funcs
+
+
+NumpyTake = deterministic_from_funcs("take", np.take)
+NumpyChoose = deterministic_from_funcs("choose", np.choose)
+
+
+class KIndex(pymc.Deterministic):
+    r""" A deterministic that dynamically tracks which time/first axis
+    indices correspond to a given state.
+
+    It keeps a static record of the indices it creates; that way it
+    doesn't make duplicates for a given dynamic state sequence.
+
+    XXX: Can't trace these Deterministics, since they change shape.
+    """
+    def __new__(cls, k, states, *args, **kwds):
+        if isinstance(states, pymc.Node):
+            k_indices = getattr(states, 'k_indices', {})
+            k_index = k_indices.get(k, None)
+
+            if k_index is not None:
+                return k_index
+        else:
+            return super(KIndex, cls).__new__(cls, k, states,
+                                              *args, **kwds)
+
+    def __init__(self, k, states, *args, **kwds):
+        r"""
+        Parameters
+        ==========
+        k: int
+            State to track.
+        states: pymc.Node, ndarray of int
+            State sequence in which `k` is a possible state.
+        """
+        if not np.issubdtype(getattr(k, 'dtype', type(k)), np.int):
+            raise ValueError("k must be an int: type(k)={}".format(type(k)))
+
+        if not np.issubdtype(getattr(states, 'dtype', type(k)), np.int):
+            raise ValueError(("states must be an int:"
+                             "type(states)={}".format(type(states))))
+
+        parents = {'k': k, 'states': states}
+
+        def k_idx(k, states):
+            return np.flatnonzero(k == states)
+
+        name = "which_{}_eq_{}".format(states.__name__, k)
+
+        super(KIndex, self).__init__(eval=k_idx, doc=self.__doc__,
+                                     name=name, parents=parents,
+                                     trace=False, dtype=np.int,
+                                     *args, **kwds)
+
+        if isinstance(states, pymc.Node):
+            k_indices = getattr(states, 'k_indices', {})
+            k_indices.update({k: self})
+            states.k_indices = k_indices
 
 
 class HMMLinearCombination(pymc.Deterministic):
@@ -54,7 +115,8 @@ class HMMLinearCombination(pymc.Deterministic):
         if not self.N_states == np.alen(betas):
             raise ValueError("len(X_matrices) must equal len(betas)")
 
-        if not np.count_nonzero(np.diff([np.alen(X_) for X_ in X_matrices])) == 0:
+        if not np.count_nonzero(np.diff([np.alen(X_)
+                                         for X_ in X_matrices])) == 0:
             raise ValueError("X_matrices must all have equal first dimension")
 
         self.N_obs = np.alen(X_matrices[0])
@@ -74,17 +136,8 @@ class HMMLinearCombination(pymc.Deterministic):
 
         for k in xrange(self.N_states):
 
-            def which_k_func(s_=states, k_=k):
-                return np.equal(k_, s_)
-
-            w_k = pymc.Lambda("w_{}".format(k), which_k_func,
-                              trace=False)
-
-            def X_k_func(X_=X_matrices[k], t_=w_k):
-                return X_[t_]
-
-            X_k_mat = pymc.Lambda("X_{}".format(k), X_k_func,
-                                  trace=False)
+            w_k = KIndex(k, states)
+            X_k_mat = NumpyTake(X_matrices[k], w_k, axis=0)
 
             this_beta = betas[k]
             k_p = pymc.LinearCombination("mu_{}".format(k),

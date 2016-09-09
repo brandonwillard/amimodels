@@ -13,7 +13,7 @@ import pymc
 
 from .stochastics import HMMStateSeq, TransProbMatrix
 from .hmm_utils import compute_trans_freqs, compute_steady_state
-from .deterministics import HMMLinearCombination
+from .deterministics import (HMMLinearCombination, KIndex, NumpyTake, NumpyChoose)
 
 
 def get_stochs_excluding(stoch, excluding):
@@ -588,7 +588,7 @@ def make_normal_hmm(y_data, X_data, initial_params=None, single_obs_var=False,
 
         \lambda^{k}_i &\sim \operatorname{Cauchy}^{+}(0, 1) \\
         \tau^{(k)} &\sim \operatorname{Cauchy}^{+}(0, 1) \\
-        V^{(k)} &\sim \operatorname{Gamma}(n_0/2, n_0 S_0/2)
+        V^{-(k)} &\sim \operatorname{Gamma}(n_0/2, n_0 S_0/2)
 
     for :math:`k \in \{1, \ldots, K\}`.
 
@@ -607,7 +607,7 @@ def make_normal_hmm(y_data, X_data, initial_params=None, single_obs_var=False,
 
     Parameters
     ==========
-    y_data: pandas.DataFrame
+    y_data: pandas.Series or pandas.DataFrame
         Usage/response observations :math:`y_t`.
     X_data: list of pandas.DataFrame
         List of design matrices for each state, i.e. :math:`x_t^{(S_t)}`.  Each
@@ -695,12 +695,7 @@ def make_normal_hmm(y_data, X_data, initial_params=None, single_obs_var=False,
     # Now, initialize all the intra-state terms:
     for k in range(N_states):
 
-        def k_idx_func(s_=states, k_=k):
-            return np.flatnonzero(k_ == s_)
-
-        # XXX: Can't trace these Deterministics, since they change shape.
-        k_idx = pymc.Lambda("state-idx-{}".format(k),
-                            k_idx_func, trace=False)
+        k_idx = KIndex("state-idx-{}".format(k), k, states)
 
         state_obs_idx += (k_idx,)
 

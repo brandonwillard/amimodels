@@ -5,6 +5,7 @@ This module provides PyMC MCMC sampler step methods.
 """
 import types
 from warnings import warn
+from itertools import chain
 
 import numpy as np
 import pymc
@@ -111,7 +112,7 @@ def create_lazy_logp_t(stoch):
     return y_rv_logp_t
 
 
-def find_all_paths(start, end, path=[], ignored=[], dir='children'):
+def find_all_paths(start, end, path=[], ignored_nodes=[], dir='children'):
     """ Finds graph paths.
 
     Taken from `here <https://www.python.org/doc/essays/graphs/>`_.
@@ -139,11 +140,11 @@ def find_all_paths(start, end, path=[], ignored=[], dir='children'):
     #    return []
     paths = []
     for node in getattr(start, dir):
-        if node in ignored:
+        if node in ignored_nodes:
             continue
         if node not in path:
             newpaths = find_all_paths(node, end,
-                                      path, ignored)
+                                      path, ignored_nodes)
             for newpath in newpaths:
                 paths.append(newpath)
     return paths
@@ -171,6 +172,27 @@ class PriorObsSampler(pymc.StepMethod):
     def step(self):
         for s_ in self.stochastics:
             s_.random()
+
+
+class PosteriorSampler(pymc.StepMethod):
+    """ If a stochastic has a non-empty `posterior` field,
+    sample it!
+    """
+    @classmethod
+    def competence(cls, targets):
+        if all([isinstance(getattr(t_, 'posterior', None), pymc.Stochastic)
+                for t_ in targets]):
+            return 4
+        else:
+            return 0
+
+    def __init__(self, variables, verbose=-1, tally=True):
+        super(PosteriorSampler, self).__init__(variables, verbose, tally=tally)
+
+    def step(self):
+        for s_ in self.stochastics:
+            s_.value = s_.posterior.value
+
 
 
 class ExtStepMethod(pymc.StepMethod):
@@ -226,7 +248,9 @@ class ExtStepMethod(pymc.StepMethod):
 
         #valid_targets = (t_ for t_ in targets
         #                 if isinstance(t_, cls.target_classes))
-        valid_targets = [isinstance(t_, cls.target_classes) for t_ in targets]
+        valid_targets = [isinstance(t_, cls.target_classes) and
+                         not hasattr(t_, 'posterior')
+                         for t_ in targets]
 
         if cls.target_exclusive_match and not any(valid_targets):
             return 0
@@ -239,7 +263,6 @@ class ExtStepMethod(pymc.StepMethod):
         # We weren't given the children (that's usually done
         # in the class constructor), so we have to find them
         # to perform this check.
-        from itertools import chain
         children = chain(*(t_.extended_children | t_.children
                            for t_ in targets))
 
@@ -576,7 +599,7 @@ class NormalNormalStep(ExtStepMethod):
                                        ":{}".format(e)))
         try:
             (beta_to_y_path,) = find_all_paths(self.stochastic, self.y_beta,
-                                               ignored=self.children_conditioned)
+                                               ignored_nodes=self.children_conditioned)
         except ValueError as e:
             raise NotImplementedError(("Step method only valid for a single "
                                        "linear relation to its observed child"
@@ -770,9 +793,8 @@ class GammaNormalStep(ExtStepMethod):
                                        "observed node."
                                        ":{}".format(e)))
         try:
-            find_all_paths(self.stochastic, self.children, ignored=self.children_conditioned)
             (gamma_to_obs_path,) = find_all_paths(self.stochastic, self.obs_rv,
-                                                  ignored=self.children_conditioned)
+                                                  ignored_nodes=self.children_conditioned)
         except ValueError as e:
             raise NotImplementedError(("Step method only valid for a single "
                                        "linear relation to its observed child"
