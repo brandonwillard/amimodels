@@ -14,6 +14,8 @@ from pymc.NumpyDeterministics import deterministic_from_funcs
 
 NumpyTake = deterministic_from_funcs("take", np.take)
 NumpyChoose = deterministic_from_funcs("choose", np.choose)
+NumpyPut = deterministic_from_funcs("put", np.put)
+NumpyStack = deterministic_from_funcs("stack", np.stack)
 
 
 class KIndex(pymc.Deterministic):
@@ -32,9 +34,9 @@ class KIndex(pymc.Deterministic):
 
             if k_index is not None:
                 return k_index
-        else:
-            return super(KIndex, cls).__new__(cls, k, states,
-                                              *args, **kwds)
+
+        return super(KIndex, cls).__new__(cls, k, states,
+                                          *args, **kwds)
 
     def __init__(self, k, states, *args, **kwds):
         r"""
@@ -137,7 +139,8 @@ class HMMLinearCombination(pymc.Deterministic):
         for k in xrange(self.N_states):
 
             w_k = KIndex(k, states)
-            X_k_mat = NumpyTake(X_matrices[k], w_k, axis=0)
+            X_k_mat = NumpyTake(np.asarray(X_matrices[k]),
+                                w_k, axis=0)
 
             this_beta = betas[k]
             k_p = pymc.LinearCombination("mu_{}".format(k),
@@ -166,3 +169,4 @@ class HMMLinearCombination(pymc.Deterministic):
                                                    *args, **kwds)
 
 
+indexers = (NumpyTake, NumpyChoose, KIndex)
