@@ -13,7 +13,8 @@ import pymc
 
 from .stochastics import HMMStateSeq, TransProbMatrix
 from .hmm_utils import compute_trans_freqs, compute_steady_state
-from .deterministics import (HMMLinearCombination, KIndex, NumpyTake, NumpyChoose)
+from .deterministics import (HMMLinearCombination, KIndex, NumpyTake,
+                             NumpyChoose, NumpyHstack)
 
 
 def get_stochs_excluding(stoch, excluding):
@@ -686,6 +687,8 @@ def make_normal_hmm(y_data, X_data, initial_params=None, single_obs_var=False,
     eta_list = ()
     lambda_list = ()
     beta_tau_list = ()
+    mu_k_list = ()
+    X_k_list = ()
 
     # This is a dynamic list of the time indices allocated to each state.
     # Very useful for breaking quantities mixtures into separate,
@@ -695,7 +698,7 @@ def make_normal_hmm(y_data, X_data, initial_params=None, single_obs_var=False,
     # Now, initialize all the intra-state terms:
     for k in range(N_states):
 
-        k_idx = KIndex("state-idx-{}".format(k), k, states)
+        k_idx = KIndex(k, states)
 
         state_obs_idx += (k_idx,)
 
@@ -706,22 +709,21 @@ def make_normal_hmm(y_data, X_data, initial_params=None, single_obs_var=False,
         lambda_k = pymc.Cauchy('lambdas-{}'.format(k),
                                0., 1., size=size_k)
 
+        k_V = k if len(V_invs) == N_states else 0
+        beta_tau_k = V_invs[k_V]
+
+        beta_tau_k = beta_tau_k * lambda_k**2
+
         # We're initializing the scale of the global
         # shrinkage parameter's distribution with a decent,
         # asymptotically motivated value:
         if size_k is not None:
-            k_V = k if len(V_invs) == N_states else 0
-            eta_k_scale = pymc.Lambda('eta-{}-scale'.format(k),
-                                      lambda V_i=V_invs[k_V], s_=size_k:
-                                      np.sqrt(1/V_i) / np.sqrt(np.log(s_)),
-                                      trace=False)
             # Global shrinkage term:
-            eta_k = pymc.Cauchy('eta-{}'.format(k), 0., eta_k_scale)
+            eta_k = pymc.Cauchy('eta-{}'.format(k),
+                                0., np.sqrt(np.log(size_k)))
             eta_list += (eta_k,)
 
-            beta_tau_k = (lambda_k * eta_k)**(-2)
-        else:
-            beta_tau_k = (lambda_k)**(-2)
+            beta_tau_k = beta_tau_k * eta_k**2
 
         # Consider using just pymc.Cauchy; that way, there's
         # no support restriction that could make things difficult
@@ -738,6 +740,14 @@ def make_normal_hmm(y_data, X_data, initial_params=None, single_obs_var=False,
         #                              value=betas_0[k],
         #                              size=size_k)
 
+        X_k = NumpyTake(np.asarray(X_data[k]),
+                        k_idx, axis=0)
+
+        mu_k = pymc.LinearCombination("mu_{}".format(k),
+                                      (X_k,), (beta_k,),
+                                      trace=False)
+        X_k_list += (X_k,)
+        mu_k_list += (mu_k,)
         beta_list += (beta_k,)
         lambda_list += (lambda_k,)
         beta_tau_list += (beta_tau_k,)
@@ -748,18 +758,13 @@ def make_normal_hmm(y_data, X_data, initial_params=None, single_obs_var=False,
     lambdas = pymc.TupleContainer(lambda_list)
     beta_taus = pymc.TupleContainer(beta_tau_list)
 
-    mu = HMMLinearCombination('mu', X_data, betas, states)
+    mu = NumpyHstack(mu_k_list)
+    #mu = HMMLinearCombination('mu', X_data, betas, states)
 
     if np.alen(V_invs) == 1:
         V_inv = V_invs[0]
     else:
-        # This is a sort of hack...
-        for k, V_ in enumerate(V_invs):
-            V_.obs_idx = state_obs_idx[k]
-
-        @pymc.deterministic(trace=False, plot=False)
-        def V_inv(states_=states, V_invs_=V_invs):
-            return V_invs_[states_].astype(np.float)
+        V_inv = NumpyChoose(states, V_inv_list)
 
     y_observed = False
     if y_data is not None:

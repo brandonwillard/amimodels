@@ -8,7 +8,9 @@ import pymc
 import pytest
 from amimodels.testing import assert_hpd
 
-from amimodels.normal_hmm import *
+from amimodels.stochastics import (dvalue_class, HMMStateSeq)
+
+from amimodels.normal_hmm import NormalHMMProcess
 from amimodels.step_methods import HMMStatesStep
 
 if hasattr(sys, '_called_from_test'):
@@ -67,3 +69,57 @@ def test_hmmstateseq_mcmc(process_2_state_trans,
                      burn=mcmc_iters//2)
 
     assert_hpd(test_states, states_obs)
+
+
+def test_dvalue_class():
+
+    tv1_dval = pymc.Lambda('', lambda x_=1.2: x_)
+    tv1_dval_inst = dvalue_class(pymc.Normal,
+                                 'tv1-d', 0, 1,
+                                 value=tv1_dval)
+
+    assert isinstance(tv1_dval_inst, pymc.Normal)
+    assert isinstance(tv1_dval_inst, pymc.Stochastic)
+
+    assert tv1_dval_inst._dvalue == tv1_dval
+    assert tv1_dval_inst.value == 1.2
+    assert tv1_dval_inst._value == 1.2
+
+    tv1_dval_inst.value = 1.5
+
+    assert tv1_dval_inst._dvalue == 1.5
+    assert tv1_dval_inst.value == 1.5
+    assert tv1_dval_inst._value == 1.5
+
+    tv1 = pymc.Normal('tv1', 0, 1)
+    tv1_dval_inst._dvalue = tv1
+
+    assert tv1_dval_inst._dvalue == tv1
+    assert tv1_dval_inst.value == tv1.value
+    assert tv1_dval_inst._value == tv1.value
+
+    tv1.random()
+
+    assert tv1_dval_inst._dvalue == tv1
+    assert tv1_dval_inst.value == tv1.value
+    assert tv1_dval_inst._value == tv1.value
+
+    tv2 = pymc.Normal('tv2', 0, 1)
+    tv2_dval_inst = dvalue_class(pymc.Normal,
+                                 'tv2-d', 0, 1,
+                                 value=tv2,
+                                 observed=True)
+
+    assert tv2_dval_inst.observed
+
+    assert tv2_dval_inst._dvalue == tv2
+    assert tv2_dval_inst.value == tv2.value
+    assert tv2_dval_inst._value == tv2.value
+
+    try:
+        tv2_dval_inst.value = tv2
+    except AttributeError:
+        pass
+    else:
+        assert False, "Set `value` of observed didn't throw"
+

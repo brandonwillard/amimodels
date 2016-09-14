@@ -228,10 +228,9 @@ class ExtStepMethod(pymc.StepMethod):
     children_conditioned = []
 
     @staticmethod
-    def valid_stochastic(stochastic, children):
-        # TODO: Move a lot of the validation logic in the
-        # sublcasses to these static methods.
-
+    def valid_stochastic(stochastics, children):
+        # TODO: Move any validation logic in the class constructors
+        # to this location.
         return True
 
     @classmethod
@@ -591,14 +590,27 @@ class NormalNormalStep(ExtStepMethod):
             raise NotImplementedError(("Step method only valid for a single "
                                        "stochastics:{}".format(e)))
         try:
-            (self.y_beta,) = filter(lambda x_: getattr(x_, 'observed', False),
+            (self.obs_rv,) = filter(lambda x_: getattr(x_, 'observed', False),
                                     self.children)
         except ValueError as e:
             raise NotImplementedError(("Step method only valid for a single "
                                        "observed node."
                                        ":{}".format(e)))
+
+        # If we can work with a marginal of our observed variable (that is
+        # also the exclusive connection between stochastic and observed),
+        # then do it!
+        if hasattr(self.obs_rv, 'partitions'):
+            parts_obs_rvs = filter(lambda x_:
+                                   self.stochastic in x_.extended_parents,
+                                   self.obs_rv.partitions)
+            if len(parts_obs_rvs) == 1:
+                self.obs_rv, = parts_obs_rvs
+
+        import ipdb; ipdb.set_trace()  # XXX BREAKPOINT
+
         try:
-            (beta_to_y_path,) = find_all_paths(self.stochastic, self.y_beta,
+            (beta_to_y_path,) = find_all_paths(self.stochastic, self.obs_rv,
                                                ignored_nodes=self.children_conditioned)
         except ValueError as e:
             raise NotImplementedError(("Step method only valid for a single "
@@ -607,7 +619,7 @@ class NormalNormalStep(ExtStepMethod):
 
         # If it has no 'mu' parameter, then it's probably
         # the half-normal (with mean 0).
-        self.mu_y = self.y_beta.parents.get('mu', 0.)
+        self.mu_y = self.obs_rv.parents.get('mu', 0.)
         self.mu_beta = beta_to_y_path[1:-1]
 
         # XXX, TODO: mu_y and mu_beta might not be the same!
@@ -781,54 +793,52 @@ class GammaNormalStep(ExtStepMethod):
         super(GammaNormalStep, self).__init__(variables, *args, **kwargs)
 
         try:
-            (self.stochastic,) = self.stochastics
+            self.stochastic, = self.stochastics
         except ValueError as e:
             raise NotImplementedError(("Step method only valid for a single "
                                        "stochastics:{}".format(e)))
         try:
-            (self.obs_rv,) = filter(lambda x_: getattr(x_, 'observed', False),
-                                    self.children)
+            self.obs_rv, = filter(lambda x_: getattr(x_, 'observed', False),
+                                  self.children)
         except ValueError as e:
             raise NotImplementedError(("Step method only valid for a single "
                                        "observed node."
                                        ":{}".format(e)))
-        try:
-            (gamma_to_obs_path,) = find_all_paths(self.stochastic, self.obs_rv,
-                                                  ignored_nodes=self.children_conditioned)
-        except ValueError as e:
-            raise NotImplementedError(("Step method only valid for a single "
-                                       "linear relation to its observed child"
-                                       ":{}".format(e)))
+
+        # If we can work with a marginal of our observed variable (that is
+        # also the exclusive connection between stochastic and observed),
+        # then do it!
+        if hasattr(self.obs_rv, 'partitions'):
+            parts_obs_rvs = filter(lambda x_:
+                                   self.stochastic in x_.extended_parents,
+                                   self.obs_rv.partitions)
+            if len(parts_obs_rvs) == 1:
+                self.obs_rv, = parts_obs_rvs
+
+        # Let's check that our gamma stochastic is connected to its normal
+        # observation in a conjugate way.
+        self.tau_obs = self.obs_rv.parents['tau']
 
         # If it has no 'mu' parameter, then it's probably
         # the half-normal (with mean 0).
         mu_obs = self.obs_rv.parents.get('mu', 0.)
 
-        self.tau_obs = self.obs_rv.parents['tau']
-        self.tau_gamma = gamma_to_obs_path[1:-1]
+        # TODO: This should be in the competence check.
+        if self.stochastic not in self.tau_obs.extended_parents or\
+                self.stochastic in getattr(mu_obs, 'extended_parents', ()):
+            raise NotImplementedError("Invalid child dependency")
 
-        obs_idx = None
-        # TODO: Add support for HMMLinearCombination-like
-        # situations (i.e. when this stochastic applies to
-        # subsets of observations).
-
-        # XXX: We simply assume that whatever deterministic is
-        # between this step method's stochastic and its child/observation
-        # it is only indexing the observations belonging to this
-        # step's stochastic.
-        if len(self.tau_gamma) != 0:
-            # TODO: We currently do not support composed transforms.
-            if id(self.tau_obs) != id(self.tau_gamma[0]):
-                raise ValueError(("Only one node allowed between stochastic "
-                                  "and child."))
-
-            if not hasattr(self.stochastic, 'obs_idx'):
-                raise ValueError(("Missing obs_idx for an observation "
-                                  "partitioned stochastic."))
-
-        # FIXME: Very hackish, but it will work for now.
-        # We could create a custom Deterministic, like we did for
-        # NormalNormalStep, but...reasons (for now).
+        # TODO: If self.stochastic is 1-d (or a vector with self.obs_rv's
+        # dimension) and only ever multiplied, then we can attempt to pull it
+        # out of the collapsed product.
+        self.obs_tau = 1
+        if self.tau_obs is not self.stochastic:
+            if '_mul_' in self.tau_obs.__name__ and\
+                    self.stochastic in self.tau_obs.parents.values():
+                self.obs_tau = filter(lambda x_: x_ is not self.stochastic,
+                                      self.tau_obs.parents.values())
+            else:
+                raise NotImplementedError("Invalid child dependency")
 
         obs_idx = getattr(self.stochastic, 'obs_idx', None)
 
@@ -866,7 +876,8 @@ class GammaNormalStep(ExtStepMethod):
 
         mu_y = getattr(self.gamma_mu, 'value', self.gamma_mu)
 
-        r2 = np.sum(np.square(y - mu_y))
+        r1 = y - mu_y
+        r2 = np.dot((r1 * self.obs_tau), r1)
 
         alpha_post = self.alpha_prior + np.alen(y)/2.
         beta_post = self.beta_prior + r2/2.

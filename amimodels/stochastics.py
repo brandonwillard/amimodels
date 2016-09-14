@@ -4,6 +4,53 @@ import pymc
 from .hmm_utils import compute_steady_state
 
 
+def dvalue_class(cls, *args, **kwargs):
+    """ Creates a new class for a pymc.Node in which
+    `Node.value` is a property that can evaluate another
+    pymc.Node, i.e. a "dynamic" value class.
+    Simply put, `Node.value` calls another `Node.value`.
+
+    Parameters
+    ==========
+    cls: type
+        The class we want to extend/re-create.
+    *args, **kwargs:
+        Arguments that match the constructor of ``cls``.
+        A `value` keyword can now be an object which itself
+        has a `value` property.  It will then get evaluated
+        dynamically whenever we get `value` for the new class.
+
+    Returns
+    =======
+    instance of ``cls`` with pass-thru `value` property
+    returning ``dvalue.value``.
+    """
+    dcls = dict(cls.__dict__)
+    dcls.update({'_dvalue': None})
+
+    cls_new = type("{}_dvalue".format(cls.__name__),
+                   (cls, object), dcls)
+
+    value_prop = property(lambda self:
+                          getattr(self._dvalue, 'value', self._dvalue),
+                          lambda self, value:
+                          setattr(self, '_dvalue', value),
+                          lambda *x, **y: None)
+    setattr(cls_new, "_value", value_prop)
+
+    init_value = kwargs.pop('value', None)
+    init_observed = kwargs.pop('observed', False)
+
+    res = cls_new(*args, **kwargs)
+
+    if init_value is not None:
+        setattr(res, '_dvalue', init_value)
+    if init_observed is not None:
+        setattr(res, '_observed', init_observed)
+
+    return res
+
+
 def trans_mat_logp(value, alpha_trans):
     """ Computes the log probability of a transition probability
     matrix for the given Dirichlet parameters.
@@ -230,6 +277,6 @@ class HMMStateSeq(pymc.Stochastic):
                                                    'N_obs': N_obs,
                                                    'p0': p0},
                                           random=states_random,
-                                          dtype=np.dtype('uint'),
+                                          dtype=np.int,
                                           *args,
                                           **kwargs)

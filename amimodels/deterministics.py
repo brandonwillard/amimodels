@@ -16,6 +16,8 @@ NumpyTake = deterministic_from_funcs("take", np.take)
 NumpyChoose = deterministic_from_funcs("choose", np.choose)
 NumpyPut = deterministic_from_funcs("put", np.put)
 NumpyStack = deterministic_from_funcs("stack", np.stack)
+NumpyHstack = deterministic_from_funcs("hstack", np.hstack)
+NumpyMultidot = deterministic_from_funcs("multi_dot", np.linalg.multi_dot)
 
 
 class KIndex(pymc.Deterministic):
@@ -47,10 +49,12 @@ class KIndex(pymc.Deterministic):
         states: pymc.Node, ndarray of int
             State sequence in which `k` is a possible state.
         """
-        if not np.issubdtype(getattr(k, 'dtype', type(k)), np.int):
+        if not np.issubdtype(getattr(k, 'dtype', type(k)),
+                             np.integer):
             raise ValueError("k must be an int: type(k)={}".format(type(k)))
 
-        if not np.issubdtype(getattr(states, 'dtype', type(k)), np.int):
+        if not np.issubdtype(getattr(states, 'dtype', type(k)),
+                             np.integer):
             raise ValueError(("states must be an int:"
                              "type(states)={}".format(type(states))))
 
@@ -63,13 +67,16 @@ class KIndex(pymc.Deterministic):
 
         super(KIndex, self).__init__(eval=k_idx, doc=self.__doc__,
                                      name=name, parents=parents,
-                                     trace=False, dtype=np.int,
+                                     trace=False, dtype=np.uint,
                                      *args, **kwds)
 
         if isinstance(states, pymc.Node):
             k_indices = getattr(states, 'k_indices', {})
             k_indices.update({k: self})
             states.k_indices = k_indices
+
+
+indexers = (NumpyTake, NumpyChoose, KIndex)
 
 
 class HMMLinearCombination(pymc.Deterministic):
@@ -131,6 +138,7 @@ class HMMLinearCombination(pymc.Deterministic):
             raise ValueError("X_matrices and betas dimensions don't match")
 
         # TODO: Change these to indices instead of boolean masks
+        self.states = states
         self.which_k = tuple()
         self.X_k_matrices = tuple()
         self.k_prods = tuple()
@@ -139,17 +147,17 @@ class HMMLinearCombination(pymc.Deterministic):
         for k in xrange(self.N_states):
 
             w_k = KIndex(k, states)
+            self.which_k += (w_k,)
+
             X_k_mat = NumpyTake(np.asarray(X_matrices[k]),
                                 w_k, axis=0)
+            self.X_k_matrices += (X_k_mat,)
 
             this_beta = betas[k]
             k_p = pymc.LinearCombination("mu_{}".format(k),
                                          (X_k_mat,),
                                          (this_beta,),
                                          trace=False)
-
-            self.which_k += (w_k,)
-            self.X_k_matrices += (X_k_mat,)
             self.k_prods += (k_p,)
 
             if isinstance(this_beta, collections.Hashable):
@@ -169,4 +177,88 @@ class HMMLinearCombination(pymc.Deterministic):
                                                    *args, **kwds)
 
 
-indexers = (NumpyTake, NumpyChoose, KIndex)
+def get_indexed_items(node):
+    res = None, None
+    if isinstance(node, NumpyTake):
+        idx = node.parents['indices']
+        col = node.parents['a']
+        res = (idx, col)
+    elif isinstance(node, NumpyChoose):
+        idx = node.parents['a']
+        col = node.parents['choices']
+        res = (idx, col)
+    elif isinstance(node, HMMLinearCombination):
+        idx = node.states
+        col = node.k_prods
+        res = (idx, col)
+    elif "index" in node.parents.keys():
+        idx = node.parents['index']
+        col = node.parents['self']
+        res = (idx, col)
+
+    return res
+
+
+def parse_prod_index(node):
+    """ FIXME
+    """
+
+    if isinstance(node, HMMLinearCombination):
+        mu_s = node.k_prods
+        k_idx_s = node.which_k
+
+    elif isinstance(node, NumpyHstack):
+        # Collapse a chain of products and indexing.
+        mu_s = node.parents['tup']
+
+        for m_ in mu_s:
+            n_ = m_
+            a_ = 1
+            m_idx = None
+            while n_ is not None:
+                b_ = None
+                if isinstance(n_, pymc.LinearCombination):
+                    # Take the left term in the product,
+                    # since any indexing on the first dimension of this
+                    # is what we want.
+
+                    # FIXME: Perhaps a little restrictive taking only the
+                    # first elements.
+                    a_ *= n_.x[0]
+                    b_, = n_.y
+
+                    # TODO
+                    #if isinstance(b_, pymc.Deterministic): and\
+                    #        np.shape(b_)[-1] == :
+                    #    n_ = b_
+
+                elif isinstance(n_, pymc.Deterministic) and\
+                    "mul_" in n_.__name__ and\
+                        ('a' in n_.parents.keys() and
+                         'b' in n_.parents.keys()):
+                    a_ = n_.parents['a']
+                    b_ = n_.parents['b']
+                else:
+                    continue
+
+                n_idx = None
+                if isinstance(a_, indexers):
+                    n_idx = getattr(a_.parents, 'indices', None)
+                elif isinstance(n_, pymc.Node):
+                    n_idx = getattr(n_.parents, 'index', None)
+
+                if n_idx is not None:
+                    # TODO
+                    pass
+
+                n_ = b_
+
+            k_idx_s += (m_idx,)
+
+    elif isinstance(node, pymc.LinearCombination):
+        mu_s = node
+        # TODO
+    else:
+        return None
+
+    return zip(mu_s, k_idx_s)
