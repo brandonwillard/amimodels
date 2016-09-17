@@ -804,8 +804,8 @@ class GammaNormalStep(ExtStepMethod):
                 # Prefer the marginal observation(s).
                 # FIXME: This is not a great approach.
                 marg_obs_rvs = filter(lambda x_:
-                                      'marginal' in getattr(x_, '__name__',
-                                                            None),
+                                      'marginal' in getattr(x_, '__name__', None) and\
+                                      self.stochastic in x_.parents['tau'].parents.values(),
                                       obs_rvs)
 
                 if len(marg_obs_rvs) == 1:
@@ -852,13 +852,16 @@ class GammaNormalStep(ExtStepMethod):
         # out of the collapsed product.
         if self.tau_obs is not self.stochastic:
             from amimodels.graph import get_linear_parts
+            from operator import is_
+            from functools import partial
 
-            lin_comb = get_linear_parts(self.tau_obs, pymc.Gamma)
+            lin_comb = get_linear_parts(self.tau_obs,
+                                        partial(is_, self.stochastic))
 
-            if lin_comb.y is not self.stochastic:
+            if lin_comb.y[0] is not self.stochastic:
                 raise NotImplementedError("Invalid child dependency")
 
-            self.obs_tau = lin_comb.x
+            self.obs_tau, = lin_comb.x
 
         else:
             self.obs_tau = 1
@@ -897,10 +900,10 @@ class GammaNormalStep(ExtStepMethod):
             self.stochastic.random()
             return
 
-        mu_y = getattr(self.gamma_mu, 'value', self.gamma_mu)
+        mu_y = pymc.utils.value(self.gamma_mu)
 
         r1 = y - mu_y
-        r2 = np.dot((r1 * self.obs_tau), r1)
+        r2 = np.dot((r1 * pymc.utils.value(self.obs_tau)), r1)
 
         alpha_post = self.alpha_prior + np.alen(y)/2.
         beta_post = self.beta_prior + r2/2.
