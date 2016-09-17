@@ -17,15 +17,18 @@ NumpyChoose = deterministic_from_funcs("choose", np.choose)
 NumpyPut = deterministic_from_funcs("put", np.put)
 NumpyStack = deterministic_from_funcs("stack", np.stack)
 NumpyHstack = deterministic_from_funcs("hstack", np.hstack)
+NumpyBroadcastArrays = deterministic_from_funcs("broadcast_arrays",
+                                                np.broadcast_arrays)
 NumpyMultidot = deterministic_from_funcs("multi_dot", np.linalg.multi_dot)
 
 
 class KIndex(pymc.Deterministic):
     r""" A deterministic that dynamically tracks which time/first axis
-    indices correspond to a given state.
+    indices correspond to a given integer value.
 
-    It keeps a static record of the indices it creates; that way it
-    doesn't make duplicates for a given dynamic state sequence.
+    It keeps a static record of the indices it creates inside of
+    any pymc.Node that is being indexed.  That means we don't create
+    duplicates for the same k-index.
 
     XXX: Can't trace these Deterministics, since they change shape.
     """

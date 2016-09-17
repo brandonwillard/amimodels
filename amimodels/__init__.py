@@ -7,6 +7,9 @@ This package contains models for advanced metering infrastructure (AMI) data.
 """
 from __future__ import division, absolute_import, print_function
 
+# Load step methods into pymc registry:
+from .step_methods import *
+
 #from .normal_hmm import *
 
 VERSION = (0, 0, 1)

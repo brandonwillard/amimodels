@@ -194,7 +194,6 @@ class PosteriorSampler(pymc.StepMethod):
             s_.value = s_.posterior.value
 
 
-
 class ExtStepMethod(pymc.StepMethod):
     r""" A pymc.StepMethod subclass that performs basic input consistency checks.
     Members
@@ -798,8 +797,28 @@ class GammaNormalStep(ExtStepMethod):
             raise NotImplementedError(("Step method only valid for a single "
                                        "stochastics:{}".format(e)))
         try:
-            self.obs_rv, = filter(lambda x_: getattr(x_, 'observed', False),
-                                  self.children)
+
+            obs_rvs = filter(lambda x_: getattr(x_, 'observed', False),
+                             self.children)
+            if len(obs_rvs) > 1:
+                # Prefer the marginal observation(s).
+                # FIXME: This is not a great approach.
+                marg_obs_rvs = filter(lambda x_:
+                                      'marginal' in getattr(x_, '__name__',
+                                                            None),
+                                      obs_rvs)
+
+                if len(marg_obs_rvs) == 1:
+                    self.obs_rv, = marg_obs_rvs
+                else:
+                    raise ValueError()
+            else:
+                self.obs_rv, = obs_rvs
+
+            #obs_paths = find_all_paths(self.stochastic, obs_rvs[0])
+            #obs_paths = find_all_paths(self.stochastic, obs_rvs[1])
+            #, ignored_nodes=self.children_conditioned)
+
         except ValueError as e:
             raise NotImplementedError(("Step method only valid for a single "
                                        "observed node."
@@ -831,14 +850,18 @@ class GammaNormalStep(ExtStepMethod):
         # TODO: If self.stochastic is 1-d (or a vector with self.obs_rv's
         # dimension) and only ever multiplied, then we can attempt to pull it
         # out of the collapsed product.
-        self.obs_tau = 1
         if self.tau_obs is not self.stochastic:
-            if '_mul_' in self.tau_obs.__name__ and\
-                    self.stochastic in self.tau_obs.parents.values():
-                self.obs_tau = filter(lambda x_: x_ is not self.stochastic,
-                                      self.tau_obs.parents.values())
-            else:
+            from amimodels.graph import get_linear_parts
+
+            lin_comb = get_linear_parts(self.tau_obs, pymc.Gamma)
+
+            if lin_comb.y is not self.stochastic:
                 raise NotImplementedError("Invalid child dependency")
+
+            self.obs_tau = lin_comb.x
+
+        else:
+            self.obs_tau = 1
 
         obs_idx = getattr(self.stochastic, 'obs_idx', None)
 

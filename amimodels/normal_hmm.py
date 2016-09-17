@@ -759,12 +759,14 @@ def make_normal_hmm(y_data, X_data, initial_params=None, single_obs_var=False,
     beta_taus = pymc.TupleContainer(beta_tau_list)
 
     mu = NumpyHstack(mu_k_list)
+    mu.keep_trace = True
     #mu = HMMLinearCombination('mu', X_data, betas, states)
 
     if np.alen(V_invs) == 1:
         V_inv = V_invs[0]
     else:
-        V_inv = NumpyChoose(states, V_inv_list)
+        V_inv = NumpyChoose(states, V_inv_list,
+                            out=None)
 
     y_observed = False
     if y_data is not None:

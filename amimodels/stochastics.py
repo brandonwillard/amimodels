@@ -2,6 +2,7 @@ import numpy as np
 import pymc
 
 from .hmm_utils import compute_steady_state
+from .deterministics import KIndex
 
 
 def dvalue_class(cls, *args, **kwargs):
@@ -186,7 +187,7 @@ def states_logp(value, trans_mat, N_obs, p0):
     return logp
 
 
-def states_random(trans_mat, N_obs, p0, size=None):
+def states_random(trans_mat, N_obs, p0):
     """ Samples states from an HMM.
 
     Parameters
@@ -202,9 +203,6 @@ def states_random(trans_mat, N_obs, p0, size=None):
     p0: ndarray
         Initial state probabilities.  If `None`, the steady state
         is computed and used.
-
-    size: int
-        Not used.
 
     Returns
     =======
@@ -237,26 +235,6 @@ class HMMStateSeq(pymc.Stochastic):
     otherwise, the default Metropolis samplers will likely perform
     too poorly.
 
-    Parameters
-    ==========
-
-    trans_mat: ndarray
-        A transition probability matrix for K-many states with
-        shape (K, K-1).
-
-    N_obs: int
-        Number of observations.
-
-    p0: ndarray
-        Initial state probabilities.  If `None`, the steady state
-        is computed and used.
-
-    value: ndarray of int
-        Initial value array of discrete states numbers/indices/labels.
-
-    size: int
-        Not used.
-
     See Also
     ========
     pymc.PyMCObjects : Stochastic
@@ -264,11 +242,33 @@ class HMMStateSeq(pymc.Stochastic):
     """
 
     def __init__(self, name, trans_mat, N_obs, p0=None, *args, **kwargs):
+        """
+        Parameters
+        ==========
 
-        self.K = trans_mat.shape[0]
+        trans_mat: ndarray
+            A transition probability matrix for K-many states with shape
+            (K, K-1).
+
+        N_obs: int
+            Number of observations.
+
+        p0: ndarray
+            Initial state probabilities.  If `None`, the steady state
+            is computed and used.
+
+        value: ndarray (int)
+            Initial value array of discrete states numbers/indices/labels.
+        """
+
+        self.N_states = trans_mat.shape[0]
+        # Legacy?
+        self.K = self.N_states
+
         if not (len(trans_mat.shape) == 2 and
-                trans_mat.shape[1] == self.K - 1):
-            raise ValueError("trans_mat must have ndim == 2 and shape (K, K-1)")
+                trans_mat.shape[1] == self.N_states - 1):
+            raise ValueError(("trans_mat must have ndim == 2 and "
+                              "shape (K, K-1)"))
 
         super(HMMStateSeq, self).__init__(logp=states_logp,
                                           doc=HMMStateSeq.__doc__,
@@ -280,3 +280,8 @@ class HMMStateSeq(pymc.Stochastic):
                                           dtype=np.int,
                                           *args,
                                           **kwargs)
+
+        # Create Deterministics that effectively give `range(N_obs)[k == self]`
+        # for each k.  KIndex's constructor should populate `self.k_indices`.
+        for k in xrange(self.N_states):
+            KIndex(k, self)
