@@ -340,6 +340,38 @@ class HMMStatesStep(ExtStepMethod):
     linear_OK = False
     target_exclusive_match = True
 
+    def _pick_children(self, stoch):
+        # XXX: These are some fairly limiting assumptions.  What if
+        # the state sequence modulates a sum, which is in turn observed
+        # (e.g. `pymc.Normal('y', mu[states], ..., observed=True)`)?
+        #obs_children = set(c_ for c_ in self.children
+        #                   if np.shape(c_) == np.shape(stoch) and
+        #                   c_.observed)
+        obs_children = set(c_ for c_ in self.children
+                           if c_.observed)
+
+        # Get rid of partitions (if we have the non-partitioned
+        # terms as well).
+        from itertools import chain
+        obs_partitions = set(chain.from_iterable(
+            getattr(c_, 'partitions', ()) for c_ in obs_children))
+        obs_children.difference_update(obs_partitions)
+
+        # Get rid of distributions that have marginals; they only
+        # introduce more "noise".
+        obs_marginalized = set(chain.from_iterable(
+            getattr(c_, 'marginalized', ()) for c_ in obs_children))
+        obs_children.difference_update(obs_marginalized)
+
+
+        # This is fairly hackish, but we order multiple observed
+        # stochastics by their names:
+        res = ()
+        for obs_var in sorted(obs_children, key=lambda x: x.__name__):
+            res += ((obs_var, create_lazy_logp_t(obs_var)),)
+
+        return res
+
     def __init__(self, variables, *args, **kwargs):
         """
         Parameters
@@ -359,13 +391,8 @@ class HMMStatesStep(ExtStepMethod):
         from collections import defaultdict
         self.stoch_to_obsfn = defaultdict(list)
         for stoch in self.state_seq:
-            obs_children = self.children.intersection(stoch.extended_children)
-            # This is fairly hackish, but we order multiple observed
-            # stochastics by their names:
-            for obs_var in sorted(obs_children, key=lambda x: x.__name__):
-                self.stoch_to_obsfn[stoch].append((obs_var,
-                                                   create_lazy_logp_t(obs_var))
-                                                  )
+            self.stoch_to_obsfn[stoch].extend(
+                self._pick_children(stoch))
 
         # Any connecting terms between obs_vars and our self.stochastic
         # (mus, for instance) should be immediately affected by changes to

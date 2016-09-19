@@ -456,4 +456,3 @@ def test_example_1():
     mcmc_step.assign_step_methods()
 
     # TODO: Check results.
-
