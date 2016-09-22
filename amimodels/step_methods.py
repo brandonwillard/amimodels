@@ -43,6 +43,19 @@ def create_lazy_logp_t(stoch):
                                           scale=1/np.sqrt(tau))
             return res
 
+    elif isinstance(stoch, pymc.NoncentralT):
+
+        def new_logp(*args, **kwargs):
+            values = np.squeeze(kwargs.pop('value'))
+            nu = np.squeeze(kwargs.pop('nu'))
+            mu = np.squeeze(kwargs.pop('mu'))
+            lam = np.squeeze(kwargs.pop('lam'))
+            res = scipy.stats.t.logpdf(values,
+                                       nu,
+                                       loc=mu,
+                                       scale=1/np.sqrt(lam))
+            return res
+
     elif isinstance(stoch, pymc.TruncatedNormal):
 
         def new_logp(*args, **kwargs):
@@ -79,7 +92,7 @@ def create_lazy_logp_t(stoch):
         raw_logp = stoch.raw_fns['logp']
 
         def single_or_indx(v, t, N):
-            if N > 1 and np.alen(getattr(v, 'value', v)) == N:
+            if N > 1 and np.alen(pymc.utils.value(v)) == N:
                 return v[t]
             else:
                 return v
@@ -91,9 +104,7 @@ def create_lazy_logp_t(stoch):
             #res = np.array([raw_logp(y, **{k: single_or_indx(v, t, N_obs) for
             #                               k, v in kwargs.items()}) for t, y in
             #                enumerate(values)])
-            res_iter = (raw_logp(y, **{k: single_or_indx(v, t, N_obs) for
-                                       k, v in kwargs.items()}) for t, y in
-                        enumerate(values))
+            res_iter = (raw_logp(value=y, **{k: single_or_indx(v, t, N_obs) for k, v in kwargs.items()}) for t, y in enumerate(values))
             res = np.fromiter(res_iter, dtype=np.float, count=N_obs)
 
             return res
@@ -180,7 +191,7 @@ class PosteriorSampler(pymc.StepMethod):
     """
     @classmethod
     def competence(cls, targets):
-        if all([isinstance(getattr(t_, 'posterior', None), pymc.Stochastic)
+        if all([isinstance(getattr(t_, 'posterior', None), pymc.Node)
                 for t_ in targets]):
             return 4
         else:
@@ -191,7 +202,7 @@ class PosteriorSampler(pymc.StepMethod):
 
     def step(self):
         for s_ in self.stochastics:
-            s_.value = s_.posterior.value
+            s_.value = pymc.utils.value(s_.posterior)
 
 
 class ExtStepMethod(pymc.StepMethod):
@@ -341,28 +352,23 @@ class HMMStatesStep(ExtStepMethod):
     target_exclusive_match = True
 
     def _pick_children(self, stoch):
-        # XXX: These are some fairly limiting assumptions.  What if
-        # the state sequence modulates a sum, which is in turn observed
-        # (e.g. `pymc.Normal('y', mu[states], ..., observed=True)`)?
-        #obs_children = set(c_ for c_ in self.children
-        #                   if np.shape(c_) == np.shape(stoch) and
-        #                   c_.observed)
-        obs_children = set(c_ for c_ in self.children
-                           if c_.observed)
+        obs_children = set(c_ for c_ in self.children if c_.observed)
 
-        # Get rid of partitions (if we have the non-partitioned
-        # terms as well).
-        from itertools import chain
-        obs_partitions = set(chain.from_iterable(
-            getattr(c_, 'partitions', ()) for c_ in obs_children))
-        obs_children.difference_update(obs_partitions)
+        # Get rid of all parts that, when combined, constitute a term
+        # already among the children.
+        obs_both_parts = set(chain.from_iterable([getattr(c_, 'partitions', ())
+                                                  for c_ in obs_children
+                                                  if all([c__ in obs_children for
+                                                          c__ in getattr(c_, 'partitions', ())]
+                                                         )]))
+        obs_children.difference_update(obs_both_parts)
 
-        # Get rid of distributions that have marginals; they only
-        # introduce more "noise".
-        obs_marginalized = set(chain.from_iterable(
-            getattr(c_, 'marginalized', ()) for c_ in obs_children))
-        obs_children.difference_update(obs_marginalized)
+        # Prefer the marginals, if any.
+        obs_marginals = set(c_ for c_ in obs_children
+                            if getattr(c_, 'ismarginal', False))
 
+        if len(obs_marginals) > 0:
+            obs_children = obs_marginals
 
         # This is fairly hackish, but we order multiple observed
         # stochastics by their names:
@@ -384,8 +390,6 @@ class HMMStatesStep(ExtStepMethod):
 
         self.state_seq = self.stochastics
 
-        #N_obs = stoch.parents['N_obs']
-        #N_obs = getattr(N_obs, 'value', N_obs)
         self.N_obs = sum([np.alen(v_.value) for v_ in self.state_seq])
 
         from collections import defaultdict
@@ -474,12 +478,12 @@ class HMMStatesStep(ExtStepMethod):
             time_range = xrange(t_last, t_end)
 
             trans_mat = stoch.parents['trans_mat']
-            trans_mat = getattr(trans_mat, 'value', trans_mat)
+            trans_mat = pymc.utils.value(trans_mat)
 
             P = np.column_stack((trans_mat, 1. - trans_mat.sum(axis=1)))
 
             p0 = stoch.parents['p0']
-            p0 = getattr(p0, 'value', p0)
+            p0 = pymc.utils.value(p0)
             if p0 is None:
                 p0 = compute_steady_state(trans_mat)
 
@@ -688,7 +692,7 @@ class NormalNormalStep(ExtStepMethod):
 
             if np.ndim(self.tau_y) == 2:
                 self.tau_y = self.tau_y[np.ix_[y_mask, y_mask]]
-            elif np.alen(getattr(self.tau_y, 'value', self.tau_y)) > 1:
+            elif np.alen(pymc.utils.value(self.tau_y)) > 1:
                 self.tau_y = self.tau_y[y_mask]
 
         # Again, if it has no 'mu' parameter, then it's probably
@@ -738,11 +742,10 @@ class NormalNormalStep(ExtStepMethod):
         X = getattr(self.X, 'value', self.X)
         # Gotta broadcast when the parameters are scalars.
         bcast_beta = np.ones_like(self.stochastic.value)
-        a_beta = bcast_beta * getattr(self.a_beta, 'value', self.a_beta)
-        tau_beta = bcast_beta * np.atleast_1d(getattr(self.tau_beta, 'value',
-                                                      self.tau_beta))
+        a_beta = bcast_beta * pymc.utils.value(self.a_beta)
+        tau_beta = bcast_beta * np.atleast_1d(pymc.utils.value(self.tau_beta))
 
-        tau_y = getattr(self.tau_y, 'value', self.tau_y)
+        tau_y = pymc.utils.value(self.tau_y)
 
         #
         # This is how we get the posterior mean:
@@ -808,6 +811,26 @@ class GammaNormalStep(ExtStepMethod):
     linear_OK = False
     target_exclusive_match = True
 
+    def _pick_children(self):
+        obs_children = set(c_ for c_ in self.children if c_.observed)
+
+        # Get rid of all parts that, when combined, constitute a term
+        # already among the children.
+        obs_both_parts = set(chain.from_iterable([getattr(c_, 'partitions', ())
+                                                  for c_ in obs_children
+                                                  if not all([c__ in obs_children for
+                                                              c__ in getattr(c_, 'partitions', ())]
+                                                             )]))
+        obs_children.difference_update(obs_both_parts)
+
+        # Prefer the marginals, if any.
+        obs_marginals = set(c_ for c_ in obs_children
+                            if getattr(c_, 'ismarginal', False))
+        if len(obs_marginals) > 0:
+            return obs_marginals
+        else:
+            return obs_children
+
     def __init__(self, variables, state_obs_mask=None, *args, **kwargs):
         r"""
         Parameters
@@ -824,42 +847,11 @@ class GammaNormalStep(ExtStepMethod):
             raise NotImplementedError(("Step method only valid for a single "
                                        "stochastics:{}".format(e)))
         try:
-
-            obs_rvs = filter(lambda x_: getattr(x_, 'observed', False),
-                             self.children)
-            if len(obs_rvs) > 1:
-                # Prefer the marginal observation(s).
-                # FIXME: This is not a great approach.
-                marg_obs_rvs = filter(lambda x_:
-                                      'marginal' in getattr(x_, '__name__', None) and\
-                                      self.stochastic in x_.parents['tau'].parents.values(),
-                                      obs_rvs)
-
-                if len(marg_obs_rvs) == 1:
-                    self.obs_rv, = marg_obs_rvs
-                else:
-                    raise ValueError()
-            else:
-                self.obs_rv, = obs_rvs
-
-            #obs_paths = find_all_paths(self.stochastic, obs_rvs[0])
-            #obs_paths = find_all_paths(self.stochastic, obs_rvs[1])
-            #, ignored_nodes=self.children_conditioned)
-
+            self.obs_rv, = self._pick_children()
         except ValueError as e:
             raise NotImplementedError(("Step method only valid for a single "
                                        "observed node."
                                        ":{}".format(e)))
-
-        # If we can work with a marginal of our observed variable (that is
-        # also the exclusive connection between stochastic and observed),
-        # then do it!
-        if hasattr(self.obs_rv, 'partitions'):
-            parts_obs_rvs = filter(lambda x_:
-                                   self.stochastic in x_.extended_parents,
-                                   self.obs_rv.partitions)
-            if len(parts_obs_rvs) == 1:
-                self.obs_rv, = parts_obs_rvs
 
         # Let's check that our gamma stochastic is connected to its normal
         # observation in a conjugate way.
@@ -868,11 +860,6 @@ class GammaNormalStep(ExtStepMethod):
         # If it has no 'mu' parameter, then it's probably
         # the half-normal (with mean 0).
         mu_obs = self.obs_rv.parents.get('mu', 0.)
-
-        # TODO: This should be in the competence check.
-        if self.stochastic not in self.tau_obs.extended_parents or\
-                self.stochastic in getattr(mu_obs, 'extended_parents', ()):
-            raise NotImplementedError("Invalid child dependency")
 
         # TODO: If self.stochastic is 1-d (or a vector with self.obs_rv's
         # dimension) and only ever multiplied, then we can attempt to pull it
@@ -887,8 +874,11 @@ class GammaNormalStep(ExtStepMethod):
 
             if lin_comb.y[0] is not self.stochastic:
                 raise NotImplementedError("Invalid child dependency")
-
-            self.obs_tau, = lin_comb.x
+                # XXX: We're just assuming this means that self.stochastic
+                # has been factored out
+                #self.obs_tau, = lin_comb.y[0]
+            else:
+                self.obs_tau, = lin_comb.x[0]
 
         else:
             self.obs_tau = 1

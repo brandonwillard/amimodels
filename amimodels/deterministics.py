@@ -17,8 +17,48 @@ NumpyChoose = deterministic_from_funcs("choose", np.choose)
 NumpyPut = deterministic_from_funcs("put", np.put)
 NumpyStack = deterministic_from_funcs("stack", np.stack)
 NumpyHstack = deterministic_from_funcs("hstack", np.hstack)
+NumpySum = pymc.NumpyDeterministics.sum
+
+# XXX: See below for likely similar issues.
 NumpyBroadcastArrays = deterministic_from_funcs("broadcast_arrays",
                                                 np.broadcast_arrays)
+
+
+class NumpyBroadcastTo(pymc.Deterministic):
+    """
+    Can't do this:
+
+        NumpyBroadcastTo = deterministic_from_funcs("broadcast_to", np.broadcast_to)
+
+    Weird stuff with array memory and/or "contiguity" using broadcast_to as
+    a Deterministic then taking a dot product later.  A quick fix involves
+    creating a copy of the broadcasted array instead of a view.
+    """
+
+    def __init__(self, array, shape, subok=False, **kwds):
+        array = np.asarray(array)
+
+        def broadcast_to_(array=array, shape=shape, subok=subok):
+            return np.array(np.broadcast_to(array, shape,
+                                            subok=subok),
+                            dtype=array.dtype)
+
+        if isinstance(array, pymc.Node):
+            array_name = array.__name__
+        else:
+            array_name = "array"
+
+        name = "broadcast_to({}, {})".format(array_name, shape)
+        super(NumpyBroadcastTo, self).__init__(eval=broadcast_to_,
+                                               doc=np.broadcast_to.__doc__,
+                                               name=name,
+                                               parents={'array': array,
+                                                        'shape': shape,
+                                                        'subok': subok},
+                                               trace=False,
+                                               dtype=array.dtype,
+                                               **kwds)
+
 NumpyMultidot = deterministic_from_funcs("multi_dot", np.linalg.multi_dot)
 
 
@@ -200,68 +240,3 @@ def get_indexed_items(node):
         res = (idx, col)
 
     return res
-
-
-def parse_prod_index(node):
-    """ FIXME
-    """
-
-    if isinstance(node, HMMLinearCombination):
-        mu_s = node.k_prods
-        k_idx_s = node.which_k
-
-    elif isinstance(node, NumpyHstack):
-        # Collapse a chain of products and indexing.
-        mu_s = node.parents['tup']
-
-        for m_ in mu_s:
-            n_ = m_
-            a_ = 1
-            m_idx = None
-            while n_ is not None:
-                b_ = None
-                if isinstance(n_, pymc.LinearCombination):
-                    # Take the left term in the product,
-                    # since any indexing on the first dimension of this
-                    # is what we want.
-
-                    # FIXME: Perhaps a little restrictive taking only the
-                    # first elements.
-                    a_ *= n_.x[0]
-                    b_, = n_.y
-
-                    # TODO
-                    #if isinstance(b_, pymc.Deterministic): and\
-                    #        np.shape(b_)[-1] == :
-                    #    n_ = b_
-
-                elif isinstance(n_, pymc.Deterministic) and\
-                    "mul_" in n_.__name__ and\
-                        ('a' in n_.parents.keys() and
-                         'b' in n_.parents.keys()):
-                    a_ = n_.parents['a']
-                    b_ = n_.parents['b']
-                else:
-                    continue
-
-                n_idx = None
-                if isinstance(a_, indexers):
-                    n_idx = getattr(a_.parents, 'indices', None)
-                elif isinstance(n_, pymc.Node):
-                    n_idx = getattr(n_.parents, 'index', None)
-
-                if n_idx is not None:
-                    # TODO
-                    pass
-
-                n_ = b_
-
-            k_idx_s += (m_idx,)
-
-    elif isinstance(node, pymc.LinearCombination):
-        mu_s = node
-        # TODO
-    else:
-        return None
-
-    return zip(mu_s, k_idx_s)
