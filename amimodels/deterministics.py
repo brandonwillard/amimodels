@@ -17,6 +17,7 @@ NumpyChoose = deterministic_from_funcs("choose", np.choose)
 NumpyPut = deterministic_from_funcs("put", np.put)
 NumpyStack = deterministic_from_funcs("stack", np.stack)
 NumpyHstack = deterministic_from_funcs("hstack", np.hstack)
+NumpyAlen = deterministic_from_funcs("alen", np.alen)
 NumpySum = pymc.NumpyDeterministics.sum
 
 # XXX: See below for likely similar issues.
@@ -62,6 +63,47 @@ class NumpyBroadcastTo(pymc.Deterministic):
 NumpyMultidot = deterministic_from_funcs("multi_dot", np.linalg.multi_dot)
 
 
+class MergeIndexed(pymc.Deterministic):
+    r""" A deterministic that merges multiple indexed arrays
+    into a single array.
+
+    XXX: Can't trace these Deterministics when they change shape.
+    """
+    def __init__(self, arrays, indices, *args, **kwds):
+        r"""
+        Parameters
+        ==========
+        arrays: list/tuple of pymc.Node or numpy.ndarray
+            Array-like objects to merge
+        indices: list/tuple of pymc.Node or numpy.ndarray
+            Indices for the arrays in ``arrays``.
+        """
+        if not all(np.issubdtype(getattr(i_, 'dtype', type(i_)),
+                                 np.integer) for i_ in indices):
+            raise ValueError("indices must be int types")
+
+        parents = {'values_': arrays, 'indices_': indices}
+
+        def merge_by_indices(values_=arrays,
+                             indices_=indices):
+            m_values = np.hstack(values_)
+            m_indices = np.hstack(indices_)
+            res = np.empty(np.shape(m_indices))
+            np.put(res, m_indices, m_values)
+            return res
+
+        name = "Merge({},{})".format(getattr(arrays, '__name__', 'arrays'),
+                                     getattr(indices, '__name__', 'indices'))
+
+        super(MergeIndexed, self).__init__(eval=merge_by_indices,
+                                           doc=self.__doc__,
+                                           name=name,
+                                           parents=parents,
+                                           #trace=False,
+                                           #dtype=np.uint,
+                                           *args, **kwds)
+
+
 class KIndex(pymc.Deterministic):
     r""" A deterministic that dynamically tracks which time/first axis
     indices correspond to a given integer value.
@@ -70,7 +112,8 @@ class KIndex(pymc.Deterministic):
     any pymc.Node that is being indexed.  That means we don't create
     duplicates for the same k-index.
 
-    XXX: Can't trace these Deterministics, since they change shape.
+    XXX: Can't trace these Deterministics when they change shape.
+    This might be a good reason for using a boolean mask instead.
     """
     def __new__(cls, k, states, *args, **kwds):
         if isinstance(states, pymc.Node):
@@ -106,7 +149,8 @@ class KIndex(pymc.Deterministic):
         def k_idx(k, states):
             return np.flatnonzero(k == states)
 
-        name = "which_{}_eq_{}".format(states.__name__, k)
+        name = "which_{}_eq_{}".format(getattr(states, '__name__', 'states'),
+                                       getattr(k, '__name__', k))
 
         super(KIndex, self).__init__(eval=k_idx, doc=self.__doc__,
                                      name=name, parents=parents,
@@ -221,10 +265,24 @@ class HMMLinearCombination(pymc.Deterministic):
 
 
 def get_indexed_items(node):
+    """ Returns a tuple of indices and the partitions (of
+    some array) corresponding to those indices.
+    """
     res = None, None
     if isinstance(node, NumpyTake):
         idx = node.parents['indices']
         col = node.parents['a']
+        res = (idx, col)
+    elif isinstance(node, NumpyHstack):
+        col = node.parents['tup']
+
+        def ranges(parts):
+            n = 0
+            for p in parts:
+                yield range(n, n + len(p))
+                n += len(p)
+
+        idx = list(ranges(col))
         res = (idx, col)
     elif isinstance(node, NumpyChoose):
         idx = node.parents['a']
@@ -233,6 +291,10 @@ def get_indexed_items(node):
     elif isinstance(node, HMMLinearCombination):
         idx = node.states
         col = node.k_prods
+        res = (idx, col)
+    elif isinstance(node, MergeIndexed):
+        idx = node.parents['indices_']
+        col = node.parents['values_']
         res = (idx, col)
     elif "index" in node.parents.keys():
         idx = node.parents['index']

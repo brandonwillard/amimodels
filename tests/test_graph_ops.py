@@ -9,6 +9,8 @@ import pymc
 import pytest
 from numpy.testing import assert_array_equal
 
+from amimodels.testing import assert_hpd
+
 from amimodels.graph import parse_node_partitions, normal_node_update
 from amimodels.normal_hmm import make_normal_hmm
 
@@ -108,6 +110,9 @@ def test_collapse(hmm_masked):
 
     # This is called 'lam' when the marginal is t-distributed.
     true_marg_tau = np.fromiter((
+        # The marginal is a t-dist when taus are gamma.
+        (2 * taus[s_].parents['alpha']/taus[s_].parents['beta']
+         if isinstance(taus[s_], pymc.Gamma) else 1) *
         np.reciprocal(1 / pymc.utils.value(y_rv.parents['tau']) +
                       np.sum(np.square(X_matrices[s_].iloc[t_]) /
                              pymc.utils.value(betas[s_].parents['tau'])))
@@ -136,7 +141,8 @@ def test_collapse_norm_hmm():
     np.random.seed(2352523)
     N_obs = 20
     #y_obs = pd.Series(np.arange(N_obs))
-    y_obs = pd.Series(np.zeros(N_obs))
+    #y_obs = pd.Series(np.zeros(N_obs))
+    y_obs = pd.Series(np.ones(N_obs))
     X_matrices = [pd.DataFrame(np.ones((N_obs, 1))),
                   pd.DataFrame(np.ones((N_obs, 2)))]
 
@@ -150,13 +156,15 @@ def test_collapse_norm_hmm():
     normal_node_update(node, updates)
 
     y_marginal, = norm_hmm.y_rv.marginals
+    posteriors = tuple(getattr(n_, 'posterior') for n_ in norm_hmm.nodes
+                       if hasattr(n_, 'posterior'))
 
     # Get rid of the dependencies on this node
     # and create a new model with the marginal
     # replacing the un-marginalized.
     #obs_node.parents.detach_extended_parents()
     y_marginal.parents['mu'].keep_trace = True
-    new_nodes = set((y_marginal, y_marginal.parents['mu'])) |\
+    new_nodes = set((y_marginal, y_marginal.parents['mu']) + posteriors) |\
         y_marginal.extended_parents
 
     #_ = [n_ for n_ in new_nodes]
@@ -164,17 +172,27 @@ def test_collapse_norm_hmm():
 
     mcmc_step = pymc.MCMC(new_norm_hmm.variables)
 
+    mcmc_step.use_step_method(pymc.StepMethods.Metropolis,
+                              new_norm_hmm.get_node('eta-1'),
+                              proposal_sd=1e-1,
+                              proposal_distribution=None
+                              )
+    mcmc_step.use_step_method(pymc.StepMethods.Metropolis,
+                              new_norm_hmm.get_node('lambdas-0'),
+                              proposal_sd=1e-1,
+                              proposal_distribution=None
+                              )
+    mcmc_step.use_step_method(pymc.StepMethods.Metropolis,
+                              new_norm_hmm.get_node('lambdas-1'),
+                              proposal_sd=1e-1,
+                              proposal_distribution=None
+                              )
     mcmc_step.assign_step_methods()
     mcmc_step.step_method_dict
 
-    mcmc_step.sample(200)
+    mcmc_step.sample(4000)
 
-    mcmc_step.db.trace_names
-
-    new_norm_hmm.get_node('states').stats()
-    new_norm_hmm.get_node('mu_y_marg').stats()
-    #y_marginal.parents['mu'].trace()
-
+    assert_hpd(new_norm_hmm.get_node('mu_y_marg'), y_obs)
 
 @pytest.mark.skip(reason="In progress...")
 def test_collapse_binomial():

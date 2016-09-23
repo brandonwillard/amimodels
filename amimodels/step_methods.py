@@ -191,9 +191,12 @@ class PosteriorSampler(pymc.StepMethod):
     """
     @classmethod
     def competence(cls, targets):
+        if not isinstance(targets, (list, tuple, set)):
+            targets = (targets,)
+
         if all([isinstance(getattr(t_, 'posterior', None), pymc.Node)
                 for t_ in targets]):
-            return 4
+            return 100
         else:
             return 0
 
@@ -202,7 +205,7 @@ class PosteriorSampler(pymc.StepMethod):
 
     def step(self):
         for s_ in self.stochastics:
-            s_.value = pymc.utils.value(s_.posterior)
+            s_.value = s_.posterior.random()
 
 
 class ExtStepMethod(pymc.StepMethod):

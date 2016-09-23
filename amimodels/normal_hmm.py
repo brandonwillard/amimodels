@@ -14,7 +14,7 @@ import pymc
 from .stochastics import HMMStateSeq, TransProbMatrix
 from .hmm_utils import compute_trans_freqs, compute_steady_state
 from .deterministics import (HMMLinearCombination, KIndex, NumpyTake,
-                             NumpyChoose, NumpyHstack)
+                             NumpyChoose, MergeIndexed)
 
 
 def get_stochs_excluding(stoch, excluding):
@@ -758,8 +758,7 @@ def make_normal_hmm(y_data, X_data, initial_params=None, single_obs_var=False,
     lambdas = pymc.TupleContainer(lambda_list)
     beta_taus = pymc.TupleContainer(beta_tau_list)
 
-    mu = NumpyHstack(mu_k_list)
-    mu.keep_trace = True
+    mu = MergeIndexed(mu_k_list, state_obs_idx, trace=True)
     #mu = HMMLinearCombination('mu', X_data, betas, states)
 
     if np.alen(V_invs) == 1:
