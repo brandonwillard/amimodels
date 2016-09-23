@@ -15,6 +15,7 @@ from .stochastics import HMMStateSeq, TransProbMatrix
 from .hmm_utils import compute_trans_freqs, compute_steady_state
 from .deterministics import (HMMLinearCombination, KIndex, NumpyTake,
                              NumpyChoose, MergeIndexed)
+from .graph import parse_node_partitions, normal_node_update
 
 
 def get_stochs_excluding(stoch, excluding):
@@ -786,6 +787,37 @@ def make_normal_hmm(y_data, X_data, initial_params=None, single_obs_var=False,
         y_pp_rv = pymc.Normal('y_pp', mu, V_inv, trace=True)
 
     return pymc.Model(locals())
+
+
+def marginalized_normal_hmm(*args, **kwargs):
+    """ Produce a marginalized version of `make_normal_hmm`.
+    """
+    norm_hmm = make_normal_hmm(*args, **kwargs)
+
+    obs_node, = norm_hmm.observed_stochastics
+
+    updates = parse_node_partitions(obs_node)
+
+    normal_node_update(obs_node, updates)
+
+    y_marginal, = norm_hmm.y_rv.marginals
+
+    posteriors = tuple(getattr(n_, 'posterior') for n_ in norm_hmm.nodes
+                       if hasattr(n_, 'posterior'))
+
+    # The observation mean is of specific interest to us.
+    mu_node = obs_node.parents['mu']
+    mu_node.keep_trace = True
+
+    new_nodes = set((y_marginal, mu_node) + posteriors)
+
+    from itertools import chain
+    new_nodes |= set(chain.from_iterable(n_.extended_parents
+                                         for n_ in new_nodes))
+
+    new_norm_hmm = pymc.Model(new_nodes)
+
+    return new_norm_hmm
 
 
 def make_poisson_hmm(y_data, X_data, initial_params):
