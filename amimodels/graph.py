@@ -18,6 +18,20 @@ from .deterministics import (NumpySum, NumpyBroadcastTo, NumpyAlen,
 
 class CallableNode(object):
     """ Simple class for delayed construction of a pymc.Distribution.
+
+    XXX: This isn't a great way to go about it.  We probably just want
+    nodes that don't necessarily add themselves as children to their
+    parents (well, that *definitely* is something we want, among potentially
+    other things).  Another way to go about this could involve a pymc.Node
+    class that "detaches" itself from its parents immediately after creation.
+    However, that doesn't stop us from all the other setup (e.g. construction
+    of lazy log probability functions, etc.)
+
+    We could also consider exclusively using unevaluated nodes of our own, but
+    then we would end up re-writing the PyMC symbolic logic.  Might be worth it
+    if we can use SymPy objects instead, then convert those to PyMC after all
+    of this graph work.  On a similar note, PyMC3/Theano should be a lot better
+    for this situation.
     """
     def __init__(self, dist_cls, parents, kwargs, name="", properties={}):
         self.dist_cls = dist_cls
@@ -25,28 +39,40 @@ class CallableNode(object):
         self.parents = parents
         self.name = name
         self.kwargs = kwargs
+
+        self._dvalue = self.kwargs.pop('value', None)
+        if isinstance(self._dvalue, CallableNode):
+            # If the value field is another CallableNode, then we need to
+            # use its value object.  Otherwise, we're hijacking the same
+            # "private" member that the dvalue Stochastic wrapper class uses.
+            self._dvalue = getattr(self._dvalue, '_dvalue', self._dvalue)
+
+        # XXX: This is another hack to emulate pymc.Node when we need the
+        # information from this unevaluated Node.
         self.__dict__.update(kwargs)
 
     def __call__(self):
         eff_cls = self.dist_cls
-        value = self.kwargs.get('value')
+
         dist_kwargs = dict(self.parents.items() + self.kwargs.items())
-        if isinstance(value, (pymc.Node, CallableNode)):
-            res = dvalue_class(eff_cls, self.name, **dist_kwargs)
+
+        if dist_kwargs.get('observed', False):
+            res = dvalue_class(eff_cls, self.name,
+                               value=self._dvalue, **dist_kwargs)
         else:
             res = eff_cls(self.name, **dist_kwargs)
 
-        self._value = self.properties.pop('value', None)
         res.__dict__.update(self.properties)
 
         return res
 
     @property
     def value(self):
-        """ This is a hack that allows these objects to used like unevaluated pymc.Nodes.
-        It's not a great idea.
+        """ XXX: This is a hack that allows these objects to used like unevaluated
+        pymc.Nodes.  It's not a great idea.
         """
-        return pymc.utils.value(self._value)
+        return getattr(self._dvalue, 'value', self._dvalue)
+
 
 def izip_repeat(*args):
     arg_groups = [(len(v), list(v)) for v in args]
@@ -628,7 +654,7 @@ def parse_node_partitions(node):
         part_node = CallableNode(type(node), parents, kwargs,
                                  name=part_name,
                                  properties=properties)
-        node.partitions += (part_node(),)
+        node.partitions += (part_node,)
 
     return node.partitions
 
@@ -657,9 +683,10 @@ def normal_node_update(node, updates):
         mu_k = node_k.parents['mu']
         tau_k = node_k.parents['tau']
 
-        # We can get an index from the value (well, its
-        # "generator"); otherwise, try to get it directly
-        # off the node.
+        # We can get an index from a node's value when that value is
+        # "dynamic" (e.g. another symbolic node); otherwise, try to get it directly
+        # from the node (again, assuming the node is an "indexing"
+        # Deterministic).
         node_idx, _ = get_indexed_items(getattr(node_k,
                                                 '_dvalue',
                                                 node_k))
@@ -931,7 +958,9 @@ def norm_gamma_post(prior, node, mu_obs=None, tau_obs=None,
     tau_obs_parts = get_linear_parts(tau_obs, partial(is_, prior))
     tau_obs_factor, = tau_obs_parts.x
 
-    obs_value = node.value if isinstance(node, CallableNode) else node
+    # XXX: This is why having unevaluated nodes can be a confusing
+    # thing: we have to check when we use one as a value.
+    obs_value = node._dvalue if isinstance(node, CallableNode) else node
 
     r1 = obs_value - mu_obs
     r2 = pymc.LinearCombination('', (r1 * tau_obs_factor,), (r1,))
@@ -996,13 +1025,15 @@ def norm_norm_post(beta_rv, obs, mu_obs=None, tau_obs=None, **kwargs):
     tau_beta = beta_rv.parents['tau']
     mu_beta = beta_rv.parents['mu']
 
+    # XXX: This is why having unevaluated nodes can be a confusing
+    # thing: we have to check when we use one as a value.
+    obs_value = obs._dvalue if isinstance(obs, CallableNode) else obs
+
     # Apply the obs's mask so that we deal with only the relevant terms.
     obs_mask = getattr(obs, '_mask', None)
     if obs_mask is not None:
         X = X[obs_mask]
-        obs = obs[obs_mask]
-
-    obs_value = obs.value if isinstance(obs, CallableNode) else obs
+        obs_value = obs_value[obs_mask]
 
     def rhs(t_b_=tau_beta, m_b_=mu_beta, X_=X,
             t_y_=tau_obs, y_=obs_value, b_s_=np.shape(beta_rv)):

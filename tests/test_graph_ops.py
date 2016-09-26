@@ -89,7 +89,7 @@ def test_collapse(hmm_masked):
                               pymc.utils.value(taus[k]))
 
         node_k_mask = pymc.utils.value(getattr(node_k, '_mask', None))
-        assert_array_equal(np.ma.masked_array(pymc.utils.value(node_k),
+        assert_array_equal(np.ma.masked_array(node_k.value,
                                               node_k_mask),
                            pymc.utils.value(y_rv)[which_k])
 

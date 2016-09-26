@@ -806,16 +806,24 @@ def marginalized_normal_hmm(*args, **kwargs):
                        if hasattr(n_, 'posterior'))
 
     # The observation mean is of specific interest to us.
-    mu_node = obs_node.parents['mu']
+    # XXX: In general we can't assume the mean parameter is called 'mu', but,
+    # since we're only doing normal-normal marginalization, it works for now.
+    mu_node = obs_node.parents.get('mu', None)
     mu_node.keep_trace = True
 
     new_nodes = set((y_marginal, mu_node) + posteriors)
 
     from itertools import chain
     new_nodes |= set(chain.from_iterable(n_.extended_parents
-                                         for n_ in new_nodes))
+                                         for n_ in new_nodes
+                                         if n_ is not None))
 
     new_norm_hmm = pymc.Model(new_nodes)
+    new_norm_hmm.mu = mu_node
+    new_norm_hmm.y_rv = y_marginal
+    new_norm_hmm.states = norm_hmm.states
+    new_norm_hmm.betas = norm_hmm.betas
+    new_norm_hmm.V_invs = norm_hmm.V_invs
 
     return new_norm_hmm
 

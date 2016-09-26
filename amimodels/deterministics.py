@@ -289,7 +289,7 @@ def get_indexed_items(node):
         col = node.parents['choices']
         res = (idx, col)
     elif isinstance(node, HMMLinearCombination):
-        idx = node.states
+        idx = node.which_k
         col = node.k_prods
         res = (idx, col)
     elif isinstance(node, MergeIndexed):
