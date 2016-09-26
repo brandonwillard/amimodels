@@ -12,7 +12,7 @@ from numpy.testing import assert_array_equal
 from amimodels.testing import assert_hpd
 
 from amimodels.graph import parse_node_partitions, normal_node_update
-from amimodels.normal_hmm import make_normal_hmm
+from amimodels.normal_hmm import make_normal_hmm, marginalized_normal_hmm
 
 if hasattr(sys, '_called_from_test'):
     slow = pytest.mark.skipif(
@@ -146,29 +146,7 @@ def test_collapse_norm_hmm():
     X_matrices = [pd.DataFrame(np.ones((N_obs, 1))),
                   pd.DataFrame(np.ones((N_obs, 2)))]
 
-    norm_hmm = make_normal_hmm(y_obs, X_matrices)
-    node, = norm_hmm.observed_stochastics
-
-    #from amimodels.graph import *
-    #from amimodels.deterministics import *
-    updates = parse_node_partitions(node)
-
-    normal_node_update(node, updates)
-
-    y_marginal, = norm_hmm.y_rv.marginals
-    posteriors = tuple(getattr(n_, 'posterior') for n_ in norm_hmm.nodes
-                       if hasattr(n_, 'posterior'))
-
-    # Get rid of the dependencies on this node
-    # and create a new model with the marginal
-    # replacing the un-marginalized.
-    #obs_node.parents.detach_extended_parents()
-    y_marginal.parents['mu'].keep_trace = True
-    new_nodes = set((y_marginal, y_marginal.parents['mu']) + posteriors) |\
-        y_marginal.extended_parents
-
-    #_ = [n_ for n_ in new_nodes]
-    new_norm_hmm = pymc.Model(new_nodes)
+    new_norm_hmm = marginalized_normal_hmm(y_obs, X_matrices)
 
     mcmc_step = pymc.MCMC(new_norm_hmm.variables)
 
@@ -187,12 +165,14 @@ def test_collapse_norm_hmm():
                               proposal_sd=1e-1,
                               proposal_distribution=None
                               )
+
     mcmc_step.assign_step_methods()
-    mcmc_step.step_method_dict
 
-    mcmc_step.sample(4000)
+    mcmc_step.sample(200)
 
-    assert_hpd(new_norm_hmm.get_node('mu_y_marg'), y_obs)
+    assert_hpd(new_norm_hmm.get_node('beta-0'), 1)
+    assert_hpd(new_norm_hmm.get_node('mu'), y_obs)
+
 
 @pytest.mark.skip(reason="In progress...")
 def test_collapse_binomial():

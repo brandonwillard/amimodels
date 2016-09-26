@@ -33,7 +33,7 @@ def dvalue_class(cls, *args, **kwargs):
                    (cls, object), dcls)
 
     value_prop = property(lambda self:
-                          getattr(self._dvalue, 'value', self._dvalue),
+                          pymc.utils.value(self._dvalue),
                           lambda self, value:
                           setattr(self, '_dvalue', value),
                           lambda *x, **y: None)

@@ -16,6 +16,38 @@ from .deterministics import (NumpySum, NumpyBroadcastTo, NumpyAlen,
                              MergeIndexed, get_indexed_items)
 
 
+class CallableNode(object):
+    """ Simple class for delayed construction of a pymc.Distribution.
+    """
+    def __init__(self, dist_cls, parents, kwargs, name="", properties={}):
+        self.dist_cls = dist_cls
+        self.properties = properties
+        self.parents = parents
+        self.name = name
+        self.kwargs = kwargs
+        self.__dict__.update(kwargs)
+
+    def __call__(self):
+        eff_cls = self.dist_cls
+        value = self.kwargs.get('value')
+        dist_kwargs = dict(self.parents.items() + self.kwargs.items())
+        if isinstance(value, (pymc.Node, CallableNode)):
+            res = dvalue_class(eff_cls, self.name, **dist_kwargs)
+        else:
+            res = eff_cls(self.name, **dist_kwargs)
+
+        self._value = self.properties.pop('value', None)
+        res.__dict__.update(self.properties)
+
+        return res
+
+    @property
+    def value(self):
+        """ This is a hack that allows these objects to used like unevaluated pymc.Nodes.
+        It's not a great idea.
+        """
+        return pymc.utils.value(self._value)
+
 def izip_repeat(*args):
     arg_groups = [(len(v), list(v)) for v in args]
     largest_len = max(v[0] for v in arg_groups)
@@ -583,45 +615,22 @@ def parse_node_partitions(node):
     for n, (n_parents, n_value) in enumerate(zip(zipped_parts,
                                                  value_parts)):
 
-        parent_args = chain.from_iterable(
+        parents = dict(chain.from_iterable(
             [(k, v) for k, v in z.items() if k is not 'value']
-            for z in n_parents)
+            for z in n_parents))
 
-        parent_args = dict(parent_args)
-        parent_args.update({'value': n_value})
+        kwargs = dict()
+        kwargs.update({'value': n_value,
+                       'observed': node.observed})
+        properties = {"_mask": getattr(n_value, "_mask", None)}
 
-        if node.observed:
-            parent_args.update({'observed': True})
-
-        part_node = dvalue_class(pymc.Normal,
-                                 '{}-{}'.format(node.__name__, n),
-                                 **parent_args)
-
-        part_node._mask = getattr(n_value, "_mask", None)
-        node.partitions += (part_node,)
+        part_name = "{}-{}".format(node.__name__, n)
+        part_node = CallableNode(type(node), parents, kwargs,
+                                 name=part_name,
+                                 properties=properties)
+        node.partitions += (part_node(),)
 
     return node.partitions
-
-
-def update_marginal_part(parent_name,
-                         marginal_parent,
-                         node_part,
-                         node_idx, node):
-
-    def mu_put(m_full_=marginal_parent,
-               m_part_=node_part,
-               n_i_=node_idx,
-               s_=np.shape(node)):
-        res = np.empty(s_)
-        if m_full_ is not None:
-            np.copyto(res, m_full_)
-        np.put(res, n_i_, m_part_)
-        return res
-
-    res = pymc.Lambda('{}_{}_marg'.format(parent_name,
-                                          node.__name__),
-                       mu_put, trace=False)
-    return res
 
 
 def normal_node_update(node, updates):
@@ -641,7 +650,6 @@ def normal_node_update(node, updates):
         This function adds fields `*.marginals` and `*.posteriors` to ``node``
         and its applicable parents, repectively.
     """
-
 
     node_marginals = ()
 
@@ -677,7 +685,7 @@ def normal_node_update(node, updates):
             # If we create it now, then it will become a dependency/child
             # of all its parents, and that can be super annoying when
             # only the marginal moments are needed.
-            node_marginal = norm_norm_marginal(beta_k, mu_k, tau_k, node_k)
+            node_marginal = norm_norm_marginal(beta_k, node_k, mu_k, tau_k)
 
             #
             # Compute the mu/mean/beta posterior.
@@ -691,8 +699,8 @@ def normal_node_update(node, updates):
             # (Re)set these so that any updates to follow use the marginal
             # values.
             # XXX: This isn't really robust, but it works for now.
-            mu_k = node_marginal.func_defaults[1].get('mu')
-            tau_k = node_marginal.func_defaults[1].get('tau')
+            mu_k = node_marginal.parents['mu']
+            tau_k = node_marginal.parents['tau']
 
 
         # Divide out tau_k_gam from the (potentially marginalized)
@@ -706,14 +714,11 @@ def normal_node_update(node, updates):
             # Log the term we are marginalizing.
             marginal_wrt += (tau_k_gam,)
 
-            node_marginal = norm_gamma_marginal(tau_k_gam,
-                                                mu_k, tau_k_parts.x[0],
-                                                node_k,
-                                                name_prefix=node_k.__name__)
+            node_marginal = norm_gamma_marginal(tau_k_gam, node_k,
+                                                mu_k, tau_k)
 
-            node_posterior = norm_gamma_post(tau_k_gam,
-                                             mu_k, tau_k_parts.x[0],
-                                             node_k)
+            node_posterior = norm_gamma_post(tau_k_gam, node_k,
+                                             mu_k, tau_k_parts.x[0])
 
         node_marginals += ((node_marginal, node_idx, marginal_wrt),)
 
@@ -729,14 +734,14 @@ def normal_node_update(node, updates):
         marginal_partitions += (node_marginal(),)
 
         if marginal_dist_cls is not None and\
-                marginal_dist_cls is not node_marginal.func_defaults[0]:
+                marginal_dist_cls is not node_marginal.dist_cls:
             # FIXME: We do not handle multiple marginal forms.
             return
         else:
-            marginal_dist_cls = node_marginal.func_defaults[0]
+            marginal_dist_cls = node_marginal.dist_cls
 
         for parent_name in marginal_dist_cls.parent_names:
-            parent = node_marginal.func_defaults[1].get(parent_name)
+            parent = node_marginal.parents[parent_name]
             marginal_parent_parts[parent_name].append((parent, node_idx))
 
     marginal_parents = {}
@@ -767,8 +772,28 @@ def normal_node_update(node, updates):
     node.marginals = pymc.TupleContainer(marginals)
 
 
-def norm_norm_marginal(beta_rv, mu_obs, tau_obs, node,
-                       name_prefix='', **kwargs):
+def construct_marginal_callable(prior, node, dist_cls, parents):
+    marginal_name = '{}-{}-marginal'.format(getattr(node, '__name__', ''),
+                                            getattr(prior, '__name__', ''))
+
+    kwargs = {'trace': False}
+
+    if node.observed:
+        kwargs.update({'value': node, 'observed': True})
+
+    properties = {'_mask': getattr(node, '_mask', None),
+                  'ismarginal': True,
+                  'marginalized': node,
+                  'marginal_wrt': pymc.SetContainer((prior,))}
+
+    create_inst = CallableNode(dist_cls, parents, kwargs,
+                               name=marginal_name,
+                               properties=properties)
+
+    return create_inst
+
+
+def norm_norm_marginal(prior, node, mu_obs=None, tau_obs=None):
     r""" Create a marginal stochastic for a normal variable with a mean
     parameter consisting of a linearly transformed normally distributed
     variable.
@@ -776,32 +801,32 @@ def norm_norm_marginal(beta_rv, mu_obs, tau_obs, node,
 
     Parameters
     ==========
-    beta_rv: pymc.Variable, or np.ndarray
+    prior: pymc.Variable, or np.ndarray
         The prior `pymc.Normal` distribution.
-    mu_obs: beta_rv or pymc.LinearCombination
+    mu_obs: ``prior`` or pymc.LinearCombination
         The observation/likelihood Normal mean
     tau_obs: pymc.Node
         The observation/likelihood Normal precision.
     node: pymc.Node
         The node being marginalized.
-    name_prefix: str (optional)
-        Prefix for name of resulting `pymc.Node`.
 
     Returns
     =======
     A function that creates the marginal distribution.
     """
-    n_name_pre = '{}-{}-marg'.format(name_prefix,
-                                     beta_rv.__name__)
+    if mu_obs is None:
+        mu_obs = node.parents['mu']
+    if tau_obs is None:
+        tau_obs = node.parents['tau']
 
-    mu_obs_parts = get_linear_parts(mu_obs, partial(is_, beta_rv))
+    mu_obs_parts = get_linear_parts(mu_obs, partial(is_, prior))
     X, = mu_obs_parts.x
 
-    mu_beta = NumpyBroadcastTo(beta_rv.parents['mu'], beta_rv.shape)
+    mu_beta = NumpyBroadcastTo(prior.parents['mu'], prior.shape)
 
     mu_marginal = pymc.LinearCombination('', (X,), (mu_beta,))
 
-    tau_beta = beta_rv.parents['tau']
+    tau_beta = prior.parents['tau']
 
     tau_beta_parts = get_linear_parts(tau_beta,
                                       lambda x_: isinstance(x_, pymc.Gamma))
@@ -813,6 +838,7 @@ def norm_norm_marginal(beta_rv, mu_obs, tau_obs, node,
 
     tau_obs_gam, = tau_obs_parts.y
     tau_obs_const, = tau_obs_parts.x
+
     # Generally, this is what we're computing
     #
     # tau_marginal = 1/(1/tau_obs + ((X / tau_beta) * X).sum(axis=1))
@@ -827,94 +853,55 @@ def norm_norm_marginal(beta_rv, mu_obs, tau_obs, node,
     if tau_obs_gam is not tau_beta_gam:
         tau_ratio_base = tau_ratio_base * tau_obs_gam / tau_beta_gam
 
-    #tau_beta_gam = NumpyBroadcastTo(tau_beta_gam, beta_rv.shape)
-
     X_P = X * tau_ratio_base
     X_P_X = NumpySum(X_P * X, axis=1)
     tau_marginal_part = (1./tau_obs_const + X_P_X)**(-1)
     tau_marginal = pymc.LinearCombination('', (tau_marginal_part,),
                                           (tau_obs_gam,))
 
-    marginal_name = '{}-marginal'.format(n_name_pre)
-    kwargs.update({'mu': mu_marginal,
-                   'tau': tau_marginal,
-                   'trace': False})
+    parents = {'mu': mu_marginal, 'tau': tau_marginal}
 
-    if node.observed:
-        kwargs.update({'value': node._dvalue,
-                       'observed': True})
-
-    def create_inst(dist=pymc.Normal, kwargs=kwargs):
-        if kwargs.get('observed', False):
-            node_marginal = dvalue_class(dist, marginal_name, **kwargs)
-        else:
-            node_marginal = dist(marginal_name, **kwargs)
-
-        node_marginal._mask = getattr(node, 'mask', None)
-        node_marginal.ismarginal = True
-        node_marginal.marginalized = node
-        node_marginal.marginal_wrt = pymc.SetContainer((beta_rv,))
-
-        return node_marginal
-
-    return create_inst
+    return construct_marginal_callable(prior, node, pymc.Normal, parents)
 
 
-def norm_gamma_marginal(tau_k_gam, mu_k, tau_k, node,
-                        name_prefix='', **kwargs):
+def norm_gamma_marginal(prior, node, mu_obs, tau_obs):
     """ Computes the normal with gamma precision prior conjugate
     marginalization.
 
     Parameters
     ==========
-    tau_k_gam: pymc.Gamma
+    prior: pymc.Gamma
         The gamma precision prior.
-    mu_k: pymc.Node
+    mu_obs: pymc.Node
         Normal observation/likelihood mean.
-    tau_k: pymc.Node
+    tau_obs: pymc.Node
         Normal observation/likelihood variance.
     node: pymc.Node
         The node being marginalized.
-    name_prefix: str (optional)
-        Prefix for name of resulting `pymc.Node`.
 
     Returns
     =======
     pymc.Node
         The marginal NoncentralT.
     """
+    if mu_obs is None:
+        mu_obs = node.parents['mu']
+    if tau_obs is None:
+        tau_obs = node.parents['tau']
 
-    t_nu = 2. * tau_k_gam.parents['alpha']
-    t_lambda = tau_k * t_nu / tau_k_gam.parents['beta']
+    # Divide out prior and use the constant factor that remains.
+    tau_obs_parts = get_linear_parts(tau_obs, partial(is_, prior))
+    tau_obs_factor, = tau_obs_parts.x
 
-    node_marg_parents = {'mu': mu_k,
-                         'lam': t_lambda,
-                         'nu': t_nu}
+    t_nu = 2. * prior.parents['alpha']
+    t_lambda = tau_obs_factor * t_nu / prior.parents['beta']
 
-    marginal_name = "{}-tau-marg".format(name_prefix)
-    kwargs.update(node_marg_parents)
+    parents = {'mu': mu_obs, 'lam': t_lambda, 'nu': t_nu}
 
-    if node.observed:
-        kwargs.update({'value': node._dvalue,
-                       'observed': True})
-
-    def create_inst(dist=pymc.NoncentralT, kwargs=kwargs):
-        if kwargs.get('observed', False):
-            node_marginal = dvalue_class(dist, marginal_name, **kwargs)
-        else:
-            node_marginal = dist(marginal_name, **kwargs)
-
-        node_marginal._mask = getattr(node, 'mask', None)
-        node_marginal.ismarginal = True
-        node_marginal.marginalized = node
-        node_marginal.marginal_wrt = pymc.SetContainer((tau_k_gam,))
-
-        return node_marginal
-
-    return create_inst
+    return construct_marginal_callable(prior, node, pymc.NoncentralT, parents)
 
 
-def norm_gamma_post(prior, node, mu_lik=None, tau_lik=None,
+def norm_gamma_post(prior, node, mu_obs=None, tau_obs=None,
                     **kwargs):
     """ Computes the normal with gamma precision prior conjugate
     posterior.
@@ -925,9 +912,9 @@ def norm_gamma_post(prior, node, mu_lik=None, tau_lik=None,
         The gamma precision prior.
     node: pymc.Node
         Normal observation/likelihood.
-    mu_lik: pymc.Node (optional)
+    mu_obs: pymc.Node (optional)
         Normal likelihood mean.
-    tau_lik: pymc.Node (optional)
+    tau_obs: pymc.Node (optional)
         Normal likelihood precision.
 
     Returns
@@ -935,16 +922,21 @@ def norm_gamma_post(prior, node, mu_lik=None, tau_lik=None,
     pymc.Node
         The posterior pymc.Gamma.
     """
-    if mu_lik is None:
-        mu_lik = node.parents['mu']
+    if mu_obs is None:
+        mu_obs = node.parents['mu']
+    if tau_obs is None:
+        tau_obs = node.parents['tau']
 
-    if tau_lik is None:
-        tau_lik = node.parents['tau']
+    # Divide out prior and use the constant factor that remains.
+    tau_obs_parts = get_linear_parts(tau_obs, partial(is_, prior))
+    tau_obs_factor, = tau_obs_parts.x
 
-    r1 = node - mu_lik
-    r2 = pymc.LinearCombination('', (r1 * tau_lik,), (r1,))
+    obs_value = node.value if isinstance(node, CallableNode) else node
 
-    alpha_post = prior.parents['alpha'] + NumpyAlen(node)/2.
+    r1 = obs_value - mu_obs
+    r2 = pymc.LinearCombination('', (r1 * tau_obs_factor,), (r1,))
+
+    alpha_post = prior.parents['alpha'] + NumpyAlen(obs_value)/2.
     beta_post = prior.parents['beta'] + r2/2.
 
     parents_post = {'alpha': alpha_post, 'beta': beta_post}
@@ -1005,13 +997,15 @@ def norm_norm_post(beta_rv, obs, mu_obs=None, tau_obs=None, **kwargs):
     mu_beta = beta_rv.parents['mu']
 
     # Apply the obs's mask so that we deal with only the relevant terms.
-    obs_mask = getattr(obs, 'mask', None)
+    obs_mask = getattr(obs, '_mask', None)
     if obs_mask is not None:
         X = X[obs_mask]
         obs = obs[obs_mask]
 
+    obs_value = obs.value if isinstance(obs, CallableNode) else obs
+
     def rhs(t_b_=tau_beta, m_b_=mu_beta, X_=X,
-            t_y_=tau_obs, y_=obs, b_s_=np.shape(beta_rv)):
+            t_y_=tau_obs, y_=obs_value, b_s_=np.shape(beta_rv)):
         m_b_ = np.array(np.broadcast_to(m_b_, b_s_, subok=True))
         t_b_ = np.array(np.broadcast_to(t_b_, b_s_, subok=True))
         #res = np.dot(t_b_, m_b_) + np.dot(X_.T * t_y_, y_)
