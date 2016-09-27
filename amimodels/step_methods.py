@@ -355,7 +355,12 @@ class HMMStatesStep(ExtStepMethod):
     target_exclusive_match = True
 
     def _pick_children(self, stoch):
-        obs_children = set(c_ for c_ in self.children if c_.observed)
+        obs_children = self.children
+
+        # Prefer directly using observed children (if possible).
+        obs_observed = set(c_ for c_ in obs_children if c_.observed)
+        if len(obs_observed) > 0:
+            obs_children = obs_observed
 
         # Get rid of all parts that, when combined, constitute a term
         # already among the children.
@@ -398,8 +403,8 @@ class HMMStatesStep(ExtStepMethod):
         from collections import defaultdict
         self.stoch_to_obsfn = defaultdict(list)
         for stoch in self.state_seq:
-            self.stoch_to_obsfn[stoch].extend(
-                self._pick_children(stoch))
+            stoch_children = self._pick_children(stoch)
+            self.stoch_to_obsfn[stoch].extend(stoch_children)
 
         # Any connecting terms between obs_vars and our self.stochastic
         # (mus, for instance) should be immediately affected by changes to
@@ -633,14 +638,13 @@ class NormalNormalStep(ExtStepMethod):
         # If we can work with a marginal of our observed variable (that is
         # also the exclusive connection between stochastic and observed),
         # then do it!
+        # FIXME: Use something like _pick_children.
         if hasattr(self.obs_rv, 'partitions'):
             parts_obs_rvs = filter(lambda x_:
                                    self.stochastic in x_.extended_parents,
                                    self.obs_rv.partitions)
             if len(parts_obs_rvs) == 1:
                 self.obs_rv, = parts_obs_rvs
-
-        import ipdb; ipdb.set_trace()  # XXX BREAKPOINT
 
         try:
             (beta_to_y_path,) = find_all_paths(self.stochastic, self.obs_rv,
@@ -663,12 +667,12 @@ class NormalNormalStep(ExtStepMethod):
         assert len(self.mu_beta) == 2 and self.mu_y == self.mu_beta[-1]
 
         (self.X,) = self.mu_beta[0].x
-        self.tau_y = self.y_beta.parents['tau']
+        self.tau_y = self.obs_rv.parents['tau']
 
         #
         # Check for a mask corresponding to missing values.
         #
-        y_mask = getattr(self.y_beta, 'mask', None)
+        y_mask = getattr(self.obs_rv, 'mask', None)
         if y_mask is not None and y_mask.any():
             y_mask = ~y_mask.squeeze()
         else:
@@ -691,7 +695,7 @@ class NormalNormalStep(ExtStepMethod):
                 y_mask = self.which_k
 
         if y_mask is not None:
-            self.y_obs = self.y_beta[y_mask]
+            self.y_obs = self.obs_rv[y_mask]
 
             if np.ndim(self.tau_y) == 2:
                 self.tau_y = self.tau_y[np.ix_[y_mask, y_mask]]
@@ -706,9 +710,9 @@ class NormalNormalStep(ExtStepMethod):
         self.post_a = None
         self.post_b = None
 
-        if isinstance(self.y_beta, (pymc.HalfNormal, pymc.TruncatedNormal)):
-            self.post_a = self.y_beta.parents.get('a', 0)
-            self.post_b = self.y_beta.parents.get('b', np.inf)
+        if isinstance(self.obs_rv, (pymc.HalfNormal, pymc.TruncatedNormal)):
+            self.post_a = self.obs_rv.parents.get('a', 0)
+            self.post_b = self.obs_rv.parents.get('b', np.inf)
 
         if isinstance(self.stochastic,
                       (pymc.HalfNormal, pymc.TruncatedNormal)):
