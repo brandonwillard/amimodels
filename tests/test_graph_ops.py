@@ -6,6 +6,8 @@ import pandas as pd
 import numpy as np
 import pymc
 
+import scipy.stats
+
 import pytest
 from numpy.testing import assert_array_equal
 
@@ -33,9 +35,13 @@ def hmm_masked(request):
     X_matrices = [pd.DataFrame(np.ones((N_obs, 1))),
                   pd.DataFrame(np.ones((N_obs, 2)))]
 
-    beta_1_tau_rv = pymc.Gamma('beta-1-tau', 1/2., 1/2., value=1e-2)
-    beta_2_tau_rv = pymc.Gamma('beta-2-tau', 1/2., 1/2., size=2,
-                               value=np.array([2e-2, 3e-2]))
+    y_tau_rv = pymc.Gamma('y-tau', 1/2., 1/2., value=1.)
+
+    beta_1_tau_rv = y_tau_rv * pymc.Gamma('beta-1-tau', 1/2., 1/2.,
+                                          value=1e-2)
+    beta_2_tau_rv = y_tau_rv * pymc.Gamma('beta-2-tau', 1/2., 1/2.,
+                                          size=2,
+                                          value=np.array([2e-2, 3e-2]))
 
     beta_1_rv = pymc.Normal('beta-1', 1, beta_1_tau_rv, value=1)
     beta_2_rv = pymc.Normal('beta-2', np.array([2, 2]),
@@ -47,8 +53,6 @@ def hmm_masked(request):
     states_rv = pymc.Binomial('states', 1, 0.5, size=np.alen(y_obs))
     mu_rv = HMMLinearCombination('mu', X_matrices,
                                  [beta_1_rv, beta_2_rv], states_rv)
-
-    y_tau_rv = pymc.Gamma('y-tau', 1/2., 1/2., value=1.)
 
     taus = [y_tau_rv, y_tau_rv]
 
@@ -266,7 +270,126 @@ def test_multiple_partitions():
     updates = parse_node_partitions(node)
 
 
+def test_normal_mean_posterior():
+    """ Test that the posterior is correct.
+    """
+
+    np.random.seed(22523)
+
+    beta_rv = pymc.Normal('beta', 0, 1e-3)
+    y_mu = 1.2
+    y_tau = 1e2
+    y_obs = np.random.normal(y_mu, 1/np.sqrt(y_tau), 1000)
+    y_rv = pymc.Normal('y', beta_rv, y_tau, value=y_obs, observed=True)
+
+    from amimodels.graph import parse_node_partitions, normal_node_update
+    updates = parse_node_partitions(y_rv)
+    normal_node_update(y_rv, updates)
+
+    y_marginal, = y_rv.marginals
+    assert isinstance(y_marginal, pymc.Normal)
+
+    beta_post = beta_rv.posterior
+    assert isinstance(beta_post, pymc.Normal)
+
+    post_interval = pymc.utils.value(beta_post.parents['mu']) +\
+        np.array([-1, 1]) * 1.98\
+        / np.sqrt(pymc.utils.value(beta_post.parents['tau']))
+
+    assert y_mu >= post_interval[0]
+    assert y_mu <= post_interval[1]
+
+    beta_post_smpls = np.fromiter((beta_post.random() for x in xrange(10000)),
+                                  dtype=np.float)
+
+    np.testing.assert_approx_equal(beta_post_smpls.mean(),
+                                   pymc.utils.value(beta_post.parents['mu']),
+                                   significant=3)
+
+
+def test_normal_mean_precision_posterior():
+    """ Test that the posterior is correct.
+    """
+    np.random.seed(22523)
+
+    nu_tau = 5
+    S_tau = 1e-1
+    tau_rv = pymc.Gamma('tau', nu_tau/2., nu_tau/2 * S_tau)
+
+    mu_beta = 1
+    C_inv_beta = 1e1
+    # XXX: tau_rv/C_beta might not get parsed properly!
+    #tau_beta = tau_rv / C_inv_beta**(-1)
+    tau_beta = tau_rv * C_inv_beta
+    beta_rv = pymc.Normal('beta', mu_beta, tau_beta)
+
+    y_mu = 2.2
+    y_tau = 1e2
+    y_obs = np.random.normal(y_mu, 1/np.sqrt(y_tau), 1000)
+
+    y_rv = pymc.Normal('y', beta_rv, tau_rv, value=y_obs, observed=True)
+
+    from amimodels.graph import parse_node_partitions, normal_node_update
+    updates = parse_node_partitions(y_rv)
+    normal_node_update(y_rv, updates)
+
+    y_marginal, = y_rv.marginals
+    assert isinstance(y_marginal, pymc.NoncentralT)
+
+    y_rv_s = pymc.Normal('y_s', beta_rv, tau_rv)
+
+    def y_smpl():
+        _ = tau_rv.random()
+        _ = beta_rv.random()
+        return y_rv_s.random()
+
+    y_smpls = np.hstack([y_smpl() for x in xrange(20 * np.alen(y_obs))])
+    y_marg_smpls = np.hstack([y_marginal.random() for x in xrange(20)])
+
+    #y_marg_smpls.mean(), y_smpls.mean()
+    #y_marg_smpls.var(), y_smpls.var()
+
+    np.testing.assert_allclose(y_marg_smpls.mean(), mu_beta, atol=1e-2)
+    np.testing.assert_allclose(y_marg_smpls.mean(), y_smpls.mean(), atol=1e-2)
+
+    assert y_smpls.var() >= y_marg_smpls.var()
+
+    # Var(t-dist) = sigma2 * nu/(nu-2) for nu > 2
+    #np.testing.assert_allclose(y_marg_smpls.var(), , rtol=1e-2)
+
+    beta_post = beta_rv.posterior
+    assert isinstance(beta_post, pymc.Normal)
+
+    post_interval = pymc.utils.value(beta_post.parents['mu']) +\
+        np.array([-1, 1]) * 1.98\
+        / np.sqrt(pymc.utils.value(beta_post.parents['tau']))
+
+    assert y_mu >= post_interval[0]
+    assert y_mu <= post_interval[1]
+
+    beta_post_smpls = np.fromiter((beta_post.random() for x in xrange(10000)),
+                                  dtype=np.float)
+
+    np.testing.assert_allclose(beta_post_smpls.mean(),
+                               pymc.utils.value(beta_post.parents['mu']),
+                               rtol=1e-2)
+
+    # TODO: Check tau's posterior.
+    #tau_post = tau_rv.posterior
+    #tau_post_parents = tau_post.parents.value
+    #tau_post_mean = tau_post_parents['alpha'] / tau_post_parents['beta']
+    #tau_post_var = tau_post_parents['alpha'] / tau_post_parents['beta']**2
+    #tau_post_interval = scipy.stats.gamma.interval(0.975,
+    #                                               tau_post_parents['alpha'],
+    #                                               scale=1/tau_post_parents['beta'])
+    #tau_prior_parents = tau_rv.parents.value
+    #tau_prior_interval = scipy.stats.gamma.interval(0.975,
+    #                                                tau_prior_parents['alpha'],
+    #                                                scale=1/tau_prior_parents['beta'])
+
+
 if __name__ == "__main__":
     import pytest
     pytest.main(["-x", "-s", "--pdbcls=IPython.core.debugger:Pdb",
-                "tests/test_graph_ops.py::test_collapse"])
+                "tests/test_graph_ops.py"])
+                #"tests/test_graph_ops.py::test_collapse"])

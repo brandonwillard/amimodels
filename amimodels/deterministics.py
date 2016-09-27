@@ -19,6 +19,7 @@ NumpyStack = deterministic_from_funcs("stack", np.stack)
 NumpyHstack = deterministic_from_funcs("hstack", np.hstack)
 NumpyAlen = deterministic_from_funcs("alen", np.alen)
 NumpySum = pymc.NumpyDeterministics.sum
+NumpyShape = deterministic_from_funcs("shape", np.shape)
 
 # XXX: See below for likely similar issues.
 NumpyBroadcastArrays = deterministic_from_funcs("broadcast_arrays",
@@ -69,7 +70,29 @@ class MergeIndexed(pymc.Deterministic):
 
     XXX: Can't trace these Deterministics when they change shape.
     """
-    def __init__(self, arrays, indices, *args, **kwds):
+    def __new__(cls, arrays, indices, **kwds):
+        """ This is a very limited, naive way of maintaining
+        distributive structure across stacked arrays.
+        """
+        if all(isinstance(a_, pymc.LinearCombination)
+               for a_ in arrays):
+            all_x = [array_.parents['x'][0] for array_ in arrays]
+            all_y = [array_.parents['y'][0] for array_ in arrays]
+
+            from .graph import node_eq
+            if reduce(node_eq, all_x) and\
+                    all(isinstance(x_, pymc.Stochastic) for x_ in all_x):
+                merged_y = MergeIndexed(all_y, indices)
+                return pymc.LinearCombination('', (all_x[0],), (merged_y,))
+            elif reduce(node_eq, all_y) and\
+                    all(isinstance(y_, pymc.Stochastic) for y_ in all_y):
+                merged_x = MergeIndexed(all_x, indices)
+                return pymc.LinearCombination('', (merged_x,), (all_y[0],))
+
+        return super(MergeIndexed, cls).__new__(cls, arrays, indices,
+                                                **kwds)
+
+    def __init__(self, arrays, indices, **kwds):
         r"""
         Parameters
         ==========
@@ -101,7 +124,7 @@ class MergeIndexed(pymc.Deterministic):
                                            parents=parents,
                                            #trace=False,
                                            #dtype=np.uint,
-                                           *args, **kwds)
+                                           **kwds)
 
 
 class KIndex(pymc.Deterministic):

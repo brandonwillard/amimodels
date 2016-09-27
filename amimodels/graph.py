@@ -735,7 +735,10 @@ def normal_node_update(node, updates):
         tau_k_parts = get_linear_parts(tau_k, partial(is_, tau_k_gam))
 
         if isinstance(tau_k_gam, pymc.Gamma) and\
-                tau_k_parts.y[0] is tau_k_gam:
+                tau_k_parts.y[0] is tau_k_gam and\
+                tau_k_gam not in getattr(tau_k_parts.x[0],
+                                         'extended_parents',
+                                         None):
             # Normal-Gamma Update
 
             # Log the term we are marginalizing.
@@ -745,7 +748,7 @@ def normal_node_update(node, updates):
                                                 mu_k, tau_k)
 
             node_posterior = norm_gamma_post(tau_k_gam, node_k,
-                                             mu_k, tau_k_parts.x[0])
+                                             mu_k, tau_k)
 
         node_marginals += ((node_marginal, node_idx, marginal_wrt),)
 
@@ -774,13 +777,12 @@ def normal_node_update(node, updates):
     marginal_parents = {}
     for parent_name, parent_parts in marginal_parent_parts.items():
 
-        obj_idx_lists = zip(*parent_parts)
+        if len(parent_parts) > 1:
+            obj_idx_lists = zip(*parent_parts)
+            merged_parents = MergeIndexed(*obj_idx_lists)
+        else:
+            merged_parents, _ = parent_parts[0]
 
-        # TODO: Look for shared product terms in the parts.
-        #[get_linear_parts(o_, lambda x_: isinstance(x_, pymc.Stochastic))
-        # for o_ in obj_idx_lists[0]]
-
-        merged_parents = MergeIndexed(*obj_idx_lists)
         marginal_parents[parent_name] = merged_parents
 
     marginal_parents.update({'observed': node.observed,
@@ -855,16 +857,19 @@ def norm_norm_marginal(prior, node, mu_obs=None, tau_obs=None):
 
     tau_beta = prior.parents['tau']
 
-    tau_beta_parts = get_linear_parts(tau_beta,
-                                      lambda x_: isinstance(x_, pymc.Gamma))
-    tau_beta_gam, = tau_beta_parts.y
-    tau_beta_const, = tau_beta_parts.x
+    shared_gam = set(t_ for t_ in getattr(tau_obs, 'extended_parents', set()) &
+                     getattr(tau_beta, 'extended_parents', set())
+                     if isinstance(t_, pymc.Gamma))
 
-    tau_obs_parts = get_linear_parts(tau_obs,
-                                     partial(is_, tau_beta_gam))
+    from operator import contains
+    tau_obs_parts = get_linear_parts(tau_obs, partial(contains, shared_gam))
 
     tau_obs_gam, = tau_obs_parts.y
     tau_obs_const, = tau_obs_parts.x
+
+    tau_beta_parts = get_linear_parts(tau_beta, partial(is_, tau_obs_gam))
+    tau_beta_gam, = tau_beta_parts.y
+    tau_beta_const, = tau_beta_parts.x
 
     # Generally, this is what we're computing
     #
@@ -881,7 +886,7 @@ def norm_norm_marginal(prior, node, mu_obs=None, tau_obs=None):
         tau_ratio_base = tau_ratio_base * tau_obs_gam / tau_beta_gam
 
     X_P = X * tau_ratio_base
-    X_P_X = NumpySum(X_P * X, axis=1)
+    X_P_X = NumpySum(X_P * X, axis=-1)
     tau_marginal_part = (1./tau_obs_const + X_P_X)**(-1)
     tau_marginal = pymc.LinearCombination('', (tau_marginal_part,),
                                           (tau_obs_gam,))
@@ -957,6 +962,7 @@ def norm_gamma_post(prior, node, mu_obs=None, tau_obs=None,
     # Divide out prior and use the constant factor that remains.
     tau_obs_parts = get_linear_parts(tau_obs, partial(is_, prior))
     tau_obs_factor, = tau_obs_parts.x
+    assert tau_obs_parts.y[0] is prior
 
     # XXX: This is why having unevaluated nodes can be a confusing
     # thing: we have to check when we use one as a value.
@@ -983,8 +989,12 @@ def norm_norm_post(beta_rv, obs, mu_obs=None, tau_obs=None, **kwargs):
     r""" Create a posterior stochastic for a normal variable that
     acts as the mean parameter for another normal variable.
 
-     This is basically how we get the posterior mean:
-     C^{-1} m = R^{-1} a + F V^{-1} y
+    This is basically how we get the posterior mean:
+    .. math:
+        \beta \sim N(a, R),\quad y \sim N(F \beta, V)
+        \\
+        C^{-1} = F^{\top} V^{-1} F + R^{-1},\quad
+        C^{-1} m = R^{-1} a + F V^{-1} y
 
     Parameters
     ==========
@@ -1015,13 +1025,11 @@ def norm_norm_post(beta_rv, obs, mu_obs=None, tau_obs=None, **kwargs):
         assert beta_rv is mu_obs
         X = 1
 
-    #if isinstance(tau_obs, pymc.LinearCombination):
-    #    tau_obs_const, = tau_obs.x
-    #    tau_obs_gam, = tau_obs.y
-    #else:
-    #    tau_obs_const = 1
-    #    tau_obs_gam = tau_obs
-
+    beta_alen = np.shape(beta_rv)
+    if beta_alen == ():
+        beta_alen = 1
+    else:
+        beta_alen = beta_alen[0]
     tau_beta = beta_rv.parents['tau']
     mu_beta = beta_rv.parents['mu']
 
@@ -1035,27 +1043,27 @@ def norm_norm_post(beta_rv, obs, mu_obs=None, tau_obs=None, **kwargs):
         X = X[obs_mask]
         obs_value = obs_value[obs_mask]
 
-    def rhs(t_b_=tau_beta, m_b_=mu_beta, X_=X,
-            t_y_=tau_obs, y_=obs_value, b_s_=np.shape(beta_rv)):
-        m_b_ = np.array(np.broadcast_to(m_b_, b_s_, subok=True))
-        t_b_ = np.array(np.broadcast_to(t_b_, b_s_, subok=True))
+    def rhs(t_b_=tau_beta, m_b_=mu_beta, X_=X, t_y_=tau_obs,
+            y_=obs_value, b_a_=beta_alen):
+        X_ = np.broadcast_to(X_, (np.alen(y_), b_a_))
+        m_b_ = np.broadcast_to(m_b_, np.shape(X_)[-1:])
+        t_b_ = np.broadcast_to(t_b_, np.shape(X_)[-1:])
         #res = np.dot(t_b_, m_b_) + np.dot(X_.T * t_y_, y_)
-        res = t_b_ * m_b_ + np.dot(X_.T * t_y_, np.ravel(y_))
-        return np.squeeze(res)
+        rhs_res = t_b_ * m_b_ + np.dot(np.transpose(X_) * t_y_, np.ravel(y_))
+        return np.ravel(rhs_res)
 
     rhs = pymc.Lambda('{}-rhs'.format(beta_rv.__name__), rhs,
                       trace=False)
 
-    def tau_update(t_b_=tau_beta, X_=X, t_y_=tau_obs):
-        X_ = np.array(X_)
-        t_b_ = np.array(np.broadcast_to(t_b_,
-                                        np.shape(X_)[-1], subok=True))
-        t_y_ = np.array(np.broadcast_to(t_y_,
-                                        np.alen(X_), subok=True))
+    def tau_update(t_b_=tau_beta, X_=X, t_y_=tau_obs,
+                   y_=obs_value, b_a_=beta_alen):
+        X_ = np.broadcast_to(X_, (np.alen(y_), b_a_))
+        t_b_ = np.broadcast_to(t_b_, np.shape(X_)[-1:])
+        t_y_ = np.broadcast_to(t_y_, np.alen(y_))
         #res = t_b_ + np.dot(X_.T * t_y_, X_)
         X_t_y = np.einsum('ij,i->ij', X_, np.atleast_1d(t_y_))
-        res = t_b_ + np.sum(X_t_y * X_, axis=0)
-        return res
+        tau_res = t_b_ + np.sum(X_t_y * X_, axis=0)
+        return tau_res
 
     tau_post = pymc.Lambda('{}-tau-post'.format(beta_rv.__name__),
                            tau_update, trace=False)

@@ -352,3 +352,4 @@ def test_normal_normal_step():
 
     assert_hpd(mcmc_step.betas[0], betas_true[0], alpha=0.05)
     assert_hpd(mcmc_step.betas[1], betas_true[1], alpha=0.05)
+
